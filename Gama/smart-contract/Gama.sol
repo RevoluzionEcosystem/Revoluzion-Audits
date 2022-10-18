@@ -490,7 +490,7 @@ contract Ownable is Context {
      */
     constructor() {
         address msgSender = _msgSender();
-        _owner = 0x314D0D9e1908C078B9a7Acd5AfAD4186C67d1714; //change owner address here
+        _owner = _msgSender(); //change owner address here
         emit OwnershipTransferred(address(0), msgSender);
     }
 
@@ -603,48 +603,47 @@ contract GAMA is Context, IERC20, Ownable {
     using SafeMath for uint256;
     using Address for address;
 
-    string private _name = "Gama"; //token name
-    string private _symbol = "GAMA"; // token symbol
-    uint8 private _decimals = 18; //decimals to return
+    string private constant _name = "Gama"; //token name
+    string private constant _symbol = "GAMA"; // token symbol
+    uint8 private constant _decimals = 18; //decimals to return
 
     mapping(address => uint256) internal _reflectionBalance;
     mapping(address => uint256) internal _tokenBalance;
     mapping(address => mapping(address => uint256)) internal _allowances;
 
     uint256 private constant MAX = ~uint256(0);
-    uint256 internal _tokenTotal = 1000000000e18; //1 billion total supply
-    uint256 internal _reflectionTotal = (MAX - (MAX % _tokenTotal));
+    uint256 internal constant _tokenTotal = 1000000000e18; //1 billion total supply
+    uint256 internal constant _reflectionTotal = (MAX - (MAX % _tokenTotal));
 
     mapping(address => bool) isTaxless;
     mapping(address => bool) internal _isExcluded;
-    address[] internal _excluded;
+    mapping(address => uint256) public excludedIndexes;
+    address[] public _excluded;
     
     
-    uint256 public _feeDecimal = 0; // do not change this value...
+    uint256 public constant _feeDecimal = 0; // do not change this value...
     
     
     
-    address marketingWallet = 0x0a554E5A7d22720FD6052A54aa53e0d2D1D681B2; //change marketing wallet here
+    address public constant marketingWallet = 0x0a554E5A7d22720FD6052A54aa53e0d2D1D681B2; //change marketing wallet here
 
     //buy fee
-    uint256 buymarketingFee = 300; //buymarketingFee fee 3%
-    uint256 public _buyLiquidityFee = 100; //_buyLiquidityFee fee 1%
+    uint256 public constant buymarketingFee = 300; //buymarketingFee fee 3%
+    uint256 public constant _buyLiquidityFee = 100; //_buyLiquidityFee fee 1%
 
     //Sell Fee
-    uint256 sellMarketingFee = 300; //sellmarketingAndMaintananceFee fee 3%
-    uint256 public _sellLiquidityFee = 100; //_sellLiquidityFee fee 1%
+    uint256 public constant sellMarketingFee = 300; //sellmarketingAndMaintananceFee fee 3%
+    uint256 public constant _sellLiquidityFee = 100; //_sellLiquidityFee fee 1%
     
 
     
-    uint256 public _taxFeeTotal;
-    uint256 public _burnFeeTotal;
     uint256 public _liquidityFeeTotal;
 
     bool public isFeeActive = true; // should be true
     bool private inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
     
-    uint256 public maxTxAmount = 250000000e18; // no limit
+    uint256 public constant maxTxAmount = 250000000e18; // no limit
     uint256 public minTokensBeforeSwap = 1_000_000e18;
   
     IUniswapV2Router02 public  uniswapV2Router;
@@ -652,6 +651,8 @@ contract GAMA is Context, IERC20, Ownable {
 
     event SwapAndLiquifyEnabledUpdated(bool enabled);
     event SwapAndLiquify(uint256 tokensSwapped,uint256 ethReceived, uint256 tokensIntoLiqudity);
+    event UpdateRouter(address prevRouter, address currentRouter, uint256 timestamp);
+    event SetMinTokensBeforeSwap(uint256 prevMinTokensBeforeSwap, uint256 currentMinTokensBeforeSwap, uint256 timestamp);
 
     modifier lockTheSwap {
         inSwapAndLiquify = true;
@@ -670,6 +671,7 @@ contract GAMA is Context, IERC20, Ownable {
 
         // exlcude pair address from tax rewards
         _isExcluded[address(uniswapV2Pair)] = true;
+        excludedIndexes[address(uniswapV2Pair)] = _excluded.length;
         _excluded.push(address(uniswapV2Pair));
 
         _reflectionBalance[owner()] = _reflectionTotal;
@@ -677,19 +679,19 @@ contract GAMA is Context, IERC20, Ownable {
         emit Transfer(address(0),owner(), _tokenTotal);
     }
 
-    function name() public view returns (string memory) {
+    function name() public pure returns (string memory) {
         return _name;
     }
 
-    function symbol() public view returns (string memory) {
+    function symbol() public pure returns (string memory) {
         return _symbol;
     }
 
-    function decimals() public view returns (uint8) {
+    function decimals() public pure returns (uint8) {
         return _decimals;
     }
 
-    function totalSupply() public override view returns (uint256) {
+    function totalSupply() public override pure returns (uint256) {
         return _tokenTotal;
     }
     
@@ -798,20 +800,17 @@ contract GAMA is Context, IERC20, Ownable {
             );
         }
         _isExcluded[account] = true;
+        excludedIndexes[account] = _excluded.length;
         _excluded.push(account);
     }
 
     function includeAccount(address account) external onlyOwner() {
         require(_isExcluded[account], "ERC20: Account is already included");
-        for (uint256 i = 0; i < _excluded.length; i++) {
-            if (_excluded[i] == account) {
-                _excluded[i] = _excluded[_excluded.length - 1];
-                _tokenBalance[account] = 0;
-                _isExcluded[account] = false;
-                _excluded.pop();
-                break;
-            }
-        }
+        _excluded[excludedIndexes[account]] = _excluded[_excluded.length - 1];
+        _tokenBalance[account] = 0;
+        _isExcluded[account] = false;
+        excludedIndexes[_excluded[_excluded.length - 1]] = excludedIndexes[account];
+        _excluded.pop();
     }
 
     function _approve(
@@ -883,26 +882,6 @@ contract GAMA is Context, IERC20, Ownable {
             
             emit Transfer(sender, recipient, transferAmount);
         
-    }
-    
-    function collectFee(address account, uint256 amount, uint256 rate) private returns (uint256) {
-        uint256 transferAmount = amount;
-        
-
-        //@dev liquidity fee
-        if(_buyLiquidityFee != 0){
-            uint256 liquidityFee = amount.mul(_buyLiquidityFee).div(10**(_feeDecimal + 2));
-            transferAmount = transferAmount.sub(liquidityFee);
-            _reflectionBalance[address(this)] = _reflectionBalance[address(this)].add(liquidityFee.mul(rate));
-            if(_isExcluded[address(this)]){
-                _tokenBalance[address(this)] = _tokenBalance[address(this)].add(liquidityFee);
-            }
-            _liquidityFeeTotal = _liquidityFeeTotal.add(liquidityFee);
-            emit Transfer(account,address(this),liquidityFee);
-        }
-    
-        
-        return transferAmount;
     }
 
        function collectBuyFee(address account, uint256 amount, uint256 rate) private returns (uint256) {
@@ -1050,9 +1029,19 @@ contract GAMA is Context, IERC20, Ownable {
         isFeeActive = value;
     }
     
+    function updateRouter(address router_) external onlyOwner {
+        require(router_ != address(uniswapV2Router), "This is current address for the router.");
+        address prevRouter = address(uniswapV2Router);
+        uniswapV2Router = IUniswapV2Router02(router_);
+        emit UpdateRouter(prevRouter, router_, block.timestamp);
+    }
     
     function setMinTokensBeforeSwap(uint256 amount) external onlyOwner {
+        require(amount > 0, "Minimum token required should be more than 0.");
+        require(amount <= maxTxAmount, "Minimum token required cannot exceed maximum amount allowed per transaction.");
+        uint256 prevMinTokensBeforeSwap = minTokensBeforeSwap;
         minTokensBeforeSwap = amount;
+        emit SetMinTokensBeforeSwap(prevMinTokensBeforeSwap, amount, block.timestamp);
     }
 
     receive() external payable {}
