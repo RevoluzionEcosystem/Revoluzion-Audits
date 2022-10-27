@@ -613,9 +613,9 @@ contract GAMA is Context, IERC20, Ownable {
 
     uint256 private constant MAX = ~uint256(0);
     uint256 internal constant _tokenTotal = 1000000000e18; //1 billion total supply
-    uint256 internal constant _reflectionTotal = (MAX - (MAX % _tokenTotal));
+    uint256 internal _reflectionTotal = (MAX - (MAX % _tokenTotal));
 
-    mapping(address => bool) isTaxless;
+    mapping(address => bool) internal _isTaxless;
     mapping(address => bool) internal _isExcluded;
     mapping(address => uint256) public excludedIndexes;
     address[] public _excluded;
@@ -636,15 +636,17 @@ contract GAMA is Context, IERC20, Ownable {
     uint256 public constant _sellLiquidityFee = 100; //_sellLiquidityFee fee 1%
     
 
-    
+    uint256 public _tokenFeeTotal;
+    uint256 public _marketingFeeTotal;
     uint256 public _liquidityFeeTotal;
 
+    bool public presaleEnded = false;
     bool public isFeeActive = true; // should be true
     bool private inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
     
     uint256 public constant maxTxAmount = 250000000e18; // no limit
-    uint256 public minTokensBeforeSwap = 1_000_000e18;
+    uint256 public minTokensBeforeSwap = 1000000e18;
   
     IUniswapV2Router02 public  uniswapV2Router;
     address public  uniswapV2Pair;
@@ -666,8 +668,8 @@ contract GAMA is Context, IERC20, Ownable {
             .createPair(address(this), _uniswapV2Router.WETH());
         uniswapV2Router = _uniswapV2Router;
       
-        isTaxless[owner()] = true;
-        isTaxless[address(this)] = true;
+        _isTaxless[owner()] = true;
+        _isTaxless[address(this)] = true;
 
         // exlcude pair address from tax rewards
         _isExcluded[address(uniswapV2Pair)] = true;
@@ -773,6 +775,10 @@ contract GAMA is Context, IERC20, Ownable {
         return _isExcluded[account];
     }
 
+    function isTaxless(address account) public view returns (bool) {
+        return _isTaxless[account];
+    }
+
 
 
     function tokenFromReflection(uint256 reflectionAmount)
@@ -834,64 +840,149 @@ contract GAMA is Context, IERC20, Ownable {
         require(recipient != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
         
-        require(amount <= maxTxAmount, "Transfer Limit Exceeds");
+        if (presaleEnded) {
+            require(amount <= maxTxAmount, "Transfer Limit Exceeds");
+        }
         
         uint256 contractTokenBalance = balanceOf(address(this));
         bool overMinTokenBalance = contractTokenBalance >= minTokensBeforeSwap;
         if (!inSwapAndLiquify && overMinTokenBalance && sender != uniswapV2Pair && swapAndLiquifyEnabled) {
             swapAndLiquify(contractTokenBalance);
         }
-        uint256 rate = _getReflectionRate();
 
-       
-        uint256 transferAmount = amount;
-        
-        if(sender == uniswapV2Pair){
-              
-         if(isFeeActive &&  !isTaxless[recipient]){
-            transferAmount = collectBuyFee(sender,amount,rate);
-         }
+        //indicates if fee should be deducted from transfer
+        bool takeFee = isFeeActive;
 
-            _reflectionBalance[sender] -= amount;
-            _reflectionBalance[recipient] += transferAmount;
-            
-            emit Transfer(sender, recipient, transferAmount);
-            
-            return;
-        }
-        
-        
-        if(recipient == uniswapV2Pair){
-            
-            
-        if(isFeeActive && !isTaxless[sender]){
-            transferAmount = collectSellFee(sender,amount,rate);
+        //if any account belongs to _isTaxless account then remove the fee
+        if (_isTaxless[sender] || _isTaxless[recipient]) {
+            takeFee = false;
         }
 
-            _reflectionBalance[sender] -= amount;
-            _reflectionBalance[recipient] += transferAmount;
-            
-            emit Transfer(sender, recipient, transferAmount);
-            
-            return;
-            
-        }
-        
-            _reflectionBalance[sender] -= amount;
-            _reflectionBalance[recipient] += transferAmount;
-            
-            emit Transfer(sender, recipient, transferAmount);
-        
+        //transfer amount, it will take tax, burn, liquidity fee
+        _tokenTransfer(sender, recipient, amount, takeFee);
+
     }
 
-       function collectBuyFee(address account, uint256 amount, uint256 rate) private returns (uint256) {
+    function _tokenTransfer(
+        address sender,
+        address recipient,
+        uint256 amount,
+        bool takeFee
+    ) private {
+        if (_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferFromExcluded(sender, recipient, amount, takeFee);
+        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferToExcluded(sender, recipient, amount, takeFee);
+        } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferStandard(sender, recipient, amount, takeFee);
+        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferBothExcluded(sender, recipient, amount, takeFee);
+        } else {
+            _transferStandard(sender, recipient, amount, takeFee);
+        }
+    }
+
+    function _transferStandard(
+        address sender,
+        address recipient,
+        uint256 tAmount,
+        bool takeFee
+    ) private {
+        uint256 rate = _getReflectionRate();
+        uint256 transferAmount = tAmount;
+
+        if(takeFee && sender == uniswapV2Pair) {
+            transferAmount = collectBuyFee(sender,tAmount,rate);
+        } else if(takeFee && recipient == uniswapV2Pair) {
+            transferAmount = collectSellFee(sender,tAmount,rate);
+        }
+
+        _reflectionBalance[sender] = _reflectionBalance[sender].sub(tAmount.mul(rate));
+        _reflectionBalance[recipient] = _reflectionBalance[recipient].add(transferAmount.mul(rate));
+        
+        emit Transfer(sender, recipient, transferAmount);
+    }
+
+    function _transferToExcluded(
+        address sender,
+        address recipient,
+        uint256 tAmount,
+        bool takeFee
+    ) private {
+        uint256 rate = _getReflectionRate();
+        uint256 transferAmount = tAmount;
+
+        if(takeFee && sender == uniswapV2Pair) {
+            transferAmount = collectBuyFee(sender,tAmount,rate);
+        } else if(takeFee && recipient == uniswapV2Pair) {
+            transferAmount = collectSellFee(sender,tAmount,rate);
+        }
+
+        _reflectionBalance[sender] = _reflectionBalance[sender].sub(tAmount.mul(rate));
+        _tokenBalance[recipient] = _tokenBalance[recipient].add(transferAmount);
+        _reflectionBalance[recipient] = _reflectionBalance[recipient].add(transferAmount.mul(rate));
+        
+        emit Transfer(sender, recipient, transferAmount);
+    }
+
+    function _transferFromExcluded(
+        address sender,
+        address recipient,
+        uint256 tAmount,
+        bool takeFee
+    ) private {
+        uint256 rate = _getReflectionRate();
+        uint256 transferAmount = tAmount;
+
+        if(takeFee && sender == uniswapV2Pair) {
+            transferAmount = collectBuyFee(sender,tAmount,rate);
+        } else if(takeFee && recipient == uniswapV2Pair) {
+            transferAmount = collectSellFee(sender,tAmount,rate);
+        }
+
+        _tokenBalance[sender] = _tokenBalance[sender].sub(tAmount);
+        _reflectionBalance[sender] = _reflectionBalance[sender].sub(tAmount.mul(rate));
+        _reflectionBalance[recipient] = _reflectionBalance[recipient].add(transferAmount.mul(rate));
+        
+        emit Transfer(sender, recipient, transferAmount);
+    }
+
+    function _transferBothExcluded(
+        address sender,
+        address recipient,
+        uint256 tAmount,
+        bool takeFee
+    ) private {
+        uint256 rate = _getReflectionRate();
+        uint256 transferAmount = tAmount;
+
+        if(takeFee && sender == uniswapV2Pair) {
+            transferAmount = collectBuyFee(sender,tAmount,rate);
+        } else if(takeFee && recipient == uniswapV2Pair) {
+            transferAmount = collectSellFee(sender,tAmount,rate);
+        }
+
+        _tokenBalance[sender] = _tokenBalance[sender].sub(tAmount);
+        _reflectionBalance[sender] = _reflectionBalance[sender].sub(tAmount.mul(rate));
+        _tokenBalance[recipient] = _tokenBalance[recipient].add(transferAmount);
+        _reflectionBalance[recipient] = _reflectionBalance[recipient].add(transferAmount.mul(rate));
+        
+        emit Transfer(sender, recipient, transferAmount);
+    }
+
+    function collectBuyFee(address account, uint256 amount, uint256 rate) private returns (uint256) {
         uint256 transferAmount = amount;
         
         if(buymarketingFee != 0){
             uint256 _referralProgram = amount.mul(buymarketingFee).div(10**(_feeDecimal + 2));
             transferAmount=transferAmount.sub(_referralProgram);
-            _reflectionBalance[marketingWallet] += _referralProgram;
-
+            _reflectionBalance[marketingWallet] = _reflectionBalance[marketingWallet].add(_referralProgram.mul(rate));
+            if(_isExcluded[marketingWallet]){
+                _tokenBalance[marketingWallet] = _tokenBalance[marketingWallet].add(_referralProgram);
+            }
+            _reflectionTotal = _reflectionTotal.sub(_referralProgram.mul(rate));
+            _tokenFeeTotal = _tokenFeeTotal.add(_referralProgram);
+            _marketingFeeTotal = _marketingFeeTotal.add(_referralProgram);
             emit Transfer(account, marketingWallet , _referralProgram);
         }
 
@@ -903,6 +994,8 @@ contract GAMA is Context, IERC20, Ownable {
             if(_isExcluded[address(this)]){
                 _tokenBalance[address(this)] = _tokenBalance[address(this)].add(liquidityFee);
             }
+            _reflectionTotal = _reflectionTotal.sub(liquidityFee.mul(rate));
+            _tokenFeeTotal = _tokenFeeTotal.add(liquidityFee);
             _liquidityFeeTotal = _liquidityFeeTotal.add(liquidityFee);
             emit Transfer(account,address(this),liquidityFee);
         }
@@ -917,8 +1010,13 @@ contract GAMA is Context, IERC20, Ownable {
         if(sellMarketingFee != 0){
             uint256 _makretingFee=amount.mul(sellMarketingFee).div(10**(_feeDecimal + 2));
             transferAmount=transferAmount.sub(_makretingFee);
-            _reflectionBalance[marketingWallet] += _makretingFee;
-
+            _reflectionBalance[marketingWallet] = _reflectionBalance[marketingWallet].add(_makretingFee.mul(rate));
+            if(_isExcluded[marketingWallet]){
+                _tokenBalance[marketingWallet] = _tokenBalance[marketingWallet].add(_makretingFee);
+            }
+            _reflectionTotal = _reflectionTotal.sub(_makretingFee.mul(rate));
+            _tokenFeeTotal = _tokenFeeTotal.add(_makretingFee);
+            _marketingFeeTotal = _marketingFeeTotal.add(_makretingFee);
             emit Transfer(account, marketingWallet , _makretingFee);
         }
                       //@dev liquidity fee
@@ -929,13 +1027,16 @@ contract GAMA is Context, IERC20, Ownable {
             if(_isExcluded[address(this)]){
                 _tokenBalance[address(this)] = _tokenBalance[address(this)].add(liquidityFee);
             }
+            _reflectionTotal = _reflectionTotal.sub(liquidityFee.mul(rate));
+            _tokenFeeTotal = _tokenFeeTotal.add(liquidityFee);
             _liquidityFeeTotal = _liquidityFeeTotal.add(liquidityFee);
             emit Transfer(account,address(this),liquidityFee);
         }
+        
         return transferAmount;
     }
 
-    function _getReflectionRate() private view returns (uint256) {
+    function _getReflectionRate() public view returns (uint256) {
         uint256 reflectionSupply = _reflectionTotal;
         uint256 tokenSupply = _tokenTotal;
         for (uint256 i = 0; i < _excluded.length; i++) {
@@ -1007,7 +1108,7 @@ contract GAMA is Context, IERC20, Ownable {
             tokenAmount,
             0, // slippage is unavoidable
             0, // slippage is unavoidable
-            address(this),
+            owner(),
             block.timestamp
         );
     }
@@ -1017,7 +1118,7 @@ contract GAMA is Context, IERC20, Ownable {
     }
 
     function setTaxless(address account, bool value) external onlyOwner {
-        isTaxless[account] = value;
+        _isTaxless[account] = value;
     }
     
     function setSwapAndLiquifyEnabled(bool enabled) external onlyOwner {
@@ -1027,6 +1128,10 @@ contract GAMA is Context, IERC20, Ownable {
     
     function setFeeActive(bool value) external onlyOwner {
         isFeeActive = value;
+    }
+
+    function setPresaleEnded() external onlyOwner {
+        presaleEnded = true;
     }
     
     function updateRouter(address router_) external onlyOwner {
