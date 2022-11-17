@@ -1194,13 +1194,14 @@ contract SmartContToken is Context, BEP20, Ownable {
     using SafeMath for uint256;
     using Address for address;
 
-    mapping(address => uint256) private _rOwned;
-    mapping(address => uint256) private _tOwned;
-    mapping(address => mapping(address => uint256)) private _allowances;
+    mapping(address => uint256) private _reflectionOwned;
+    mapping(address => uint256) private _tokenOwned;
+    mapping(address => mapping(address => uint256)) private allowances;
 
     //Include or WhiteList to fee
     mapping(address => bool) private _isWhiteList;
     mapping(address => bool) private _isExcluded;
+    mapping(address => uint256) public excludedIndexes;
     address[] private _excluded;
 
     //Function for Future rewards 
@@ -1210,16 +1211,16 @@ contract SmartContToken is Context, BEP20, Ownable {
     }
 
     //Wallets of Fee transactions
-    address public MarketAddress;
-    address public CompanyAddress;
-    address public PoolGameAddress;
-    address private _bnb_Address;
+    address public marketAddress;
+    address public companyAddress;
+    address public poolGameAddress;
+    address private bnbAddress;
 
     //Constant fee of transactions
-    uint256 private _TAX_FEE;
-    uint256 private _COMPANY_FEE;
-    uint256 private _MARKETING_FEE;
-    uint256 private _POOLGAME_FEE;
+    uint256 private taxFee_;
+    uint256 private companyFee_;
+    uint256 private marketingFee_;
+    uint256 private poolGameFee_;
 
     //Buy Fee List
     struct BuyFee {
@@ -1241,30 +1242,30 @@ contract SmartContToken is Context, BEP20, Ownable {
     mapping(uint256 => SellFee) private sellItems;
 
     //system for max Sell
-    struct userSell {
+    struct UserSell {
         uint256 timestamp;
         uint256 dailyAmount;
         bool exist;
     }
-    mapping(address => userSell) public maxUserSell;
+    mapping(address => UserSell) public maxUserSell;
 
     //Token Informations and Supply
-    string private _name = "DBDT TOKEN";
-    string private _symbol = "DBDT";
-    uint8 private _decimals = 18;
+    string private constant NAME = "DBDT TOKEN";
+    string private constant SYMBOL = "DBDT";
+    uint8 private constant DECIMALS = 18;
 
+    uint256 private constant DECIMALFACTOR = 10 ** uint256(18);
     uint256 private constant MAX = ~uint256(0);
-    uint256 private _DECIMALFACTOR = 10 ** uint256(18);
-    uint256 private constant _tTotal = 1 * 10**3 * 10**6 * 10**18;
-    uint256 private _rTotal = (MAX - (MAX % _tTotal));
-    uint256 private _MaxTransaction = 2 * 10**18;
+    uint256 private constant TOKENTOTAL = 1 * 10**3 * 10**6 * 10**18;
+    uint256 private relectionTotal = (MAX - (MAX % TOKENTOTAL));
+    uint256 private maxTransaction = 2 * 10**18;
     bool public executeMaxTransaction = false;
 
     //Totals of acumulation of fee
-    uint256 private _tFeeTotal;
-    uint256 private _tMarketingTotal;
-    uint256 private _tCompanyTotal;
-    uint256 private _tPoolGameTotal;
+    uint256 private _tokenFeeTotal;
+    uint256 private _tokenMarketingTotal;
+    uint256 private _tokenCompanyTotal;
+    uint256 private _tokenPoolGameTotal;
 
     bool private inTransfer;
     bool private inSwapAndLiquify;
@@ -1281,7 +1282,7 @@ contract SmartContToken is Context, BEP20, Ownable {
 
     IUniswapV2Router02 public tokenSwapRoute;
     address public tokenSwapPair;
-    IUniswapV2Pair internal _TokenReserv;
+    IUniswapV2Pair internal tokenReserv;
 
     constructor(
         address Owner_,
@@ -1291,12 +1292,12 @@ contract SmartContToken is Context, BEP20, Ownable {
         address _Swap_Route
     ) {
         _owner = Owner_;
-        _rOwned[_msgSender()] = _rTotal;
-        emit Transfer(address(0), _msgSender(), _tTotal);
+        _reflectionOwned[_msgSender()] = relectionTotal;
+        emit Transfer(address(0), _msgSender(), TOKENTOTAL);
 
-        MarketAddress = _MarketingAddr;
-        CompanyAddress = _CompanyAddr;
-        PoolGameAddress = _PoolGameAddr;
+        marketAddress = _MarketingAddr;
+        companyAddress = _CompanyAddr;
+        poolGameAddress = _PoolGameAddr;
 
         IUniswapV2Router02 _tokenSwapRoute = IUniswapV2Router02(_Swap_Route);
         /* Create a Pancakeswap pair for this new token */
@@ -1304,10 +1305,11 @@ contract SmartContToken is Context, BEP20, Ownable {
             .createPair(address(this), _tokenSwapRoute.WETH());
         /* Set the rest of the contract variables */
         tokenSwapRoute = _tokenSwapRoute;
-        _bnb_Address = _tokenSwapRoute.WETH();
-        _TokenReserv = IUniswapV2Pair(tokenSwapPair);
+        bnbAddress = _tokenSwapRoute.WETH();
+        tokenReserv = IUniswapV2Pair(tokenSwapPair);
         _setAutomatedMarketMakerPair(tokenSwapPair, true);
         _isExcluded[address(this)] = true;
+        excludedIndexes[address(this)] = _excluded.length;
         _isWhiteList[address(this)] = true;
     }
 
@@ -1315,7 +1317,7 @@ contract SmartContToken is Context, BEP20, Ownable {
      * @dev Returns the name of the token.
      */
     function name() public view virtual returns (string memory) {
-        return _name;
+        return NAME;
     }
 
     /**
@@ -1323,7 +1325,7 @@ contract SmartContToken is Context, BEP20, Ownable {
      * name.
      */
     function symbol() public view virtual returns (string memory) {
-        return _symbol;
+        return SYMBOL;
     }
 
     /**
@@ -1340,11 +1342,19 @@ contract SmartContToken is Context, BEP20, Ownable {
      * {IBEP20-balanceOf} and {IBEP20-transfer}.
      */
     function decimals() public view virtual returns (uint256) {
-        return _decimals;
+        return DECIMALS;
     }
 
     function totalSupply() public pure override returns (uint256) {
-        return _tTotal;
+        return TOKENTOTAL;
+    }
+
+    function decimalFactor() public pure returns (uint256) {
+        return DECIMALFACTOR;
+    }
+
+    function allowance(address owner_, address spender_) public override view returns (uint256) {
+        return allowances[owner_][spender_];
     }
 
     function totalBalance() external view returns (uint256) {
@@ -1358,23 +1368,23 @@ contract SmartContToken is Context, BEP20, Ownable {
     fallback() external payable {}
 
     function totalFees() public view returns (uint256) {
-        return _tFeeTotal;
+        return _tokenFeeTotal;
     }
 
     function totalCompany() public view returns (uint256) {
-        return _tCompanyTotal;
+        return _tokenCompanyTotal;
     }
 
     function totalMarketing() public view returns (uint256) {
-        return _tMarketingTotal;
+        return _tokenMarketingTotal;
     }
 
     function totalPoolGame() public view returns (uint256) {
-        return _tPoolGameTotal;
+        return _tokenPoolGameTotal;
     }
 
     function getMaxTransaction() public view returns (uint256) {
-        return _MaxTransaction;
+        return maxTransaction;
     }
 
     function isExcludedFromReward(address account) public view returns (bool) {
@@ -1386,8 +1396,8 @@ contract SmartContToken is Context, BEP20, Ownable {
     }
 
     function balanceOf(address account) public view override returns (uint256) {
-        if (_isExcluded[account]) return _tOwned[account];
-        return tokenFromReflection(_rOwned[account]);
+        if (_isExcluded[account]) return _tokenOwned[account];
+        return tokenFromReflection(_reflectionOwned[account]);
     }
 
     function multSender(Receivers[] memory wallets) public onlyOwner {
@@ -1395,66 +1405,63 @@ contract SmartContToken is Context, BEP20, Ownable {
             transfer(wallets[i].wallet, wallets[i].amount);
     }
 
-    function reflect(uint256 tAmount) public {
+    function reflect(uint256 tokenAmount) public {
         address sender = _msgSender();
         require(
             !_isExcluded[sender],
             "Excluded addresses cannot call this function"
         );
-        (uint256 rAmount, ) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rTotal = _rTotal.sub(rAmount);
-        _tFeeTotal = _tFeeTotal.add(tAmount);
+        (uint256 reflectionAmount, ) = _getValues(tokenAmount);
+        _reflectionOwned[sender] = _reflectionOwned[sender].sub(reflectionAmount);
+        relectionTotal = relectionTotal.sub(reflectionAmount);
+        _tokenFeeTotal = _tokenFeeTotal.add(tokenAmount);
     }
 
-    function reflectionFromToken(uint256 tAmount, bool deductTransferFee)
+    function reflectionFromToken(uint256 tokenAmount, bool deductTransferFee)
         public
         view
         returns (uint256)
     {
-        require(tAmount <= _tTotal, "Amount must be less than supply");
+        require(tokenAmount <= TOKENTOTAL, "Amount must be less than supply");
         if (!deductTransferFee) {
-            (uint256 rAmount, ) = _getValues(tAmount);
-            return rAmount;
+            (uint256 reflectionAmount, ) = _getValues(tokenAmount);
+            return reflectionAmount;
         } else {
-            (, uint256 rTransferAmount) = _getValues(tAmount);
-            return rTransferAmount;
+            (, uint256 reflectionTransferAmount) = _getValues(tokenAmount);
+            return reflectionTransferAmount;
         }
     }
 
-    function tokenFromReflection(uint256 rAmount)
+    function tokenFromReflection(uint256 reflectionAmount)
         public
         view
         returns (uint256)
     {
         require(
-            rAmount <= _rTotal,
+            reflectionAmount <= relectionTotal,
             "Amount must be less than total reflections"
         );
         uint256 currentRate = _getRate();
-        return rAmount.div(currentRate);
+        return reflectionAmount.div(currentRate);
     }
 
     function excludeUserToReflection(address account) external onlyOwner {
         require(!_isExcluded[account], "User is already excluded");
-        if (_rOwned[account] > 0) {
-            _tOwned[account] = tokenFromReflection(_rOwned[account]);
+        if (_reflectionOwned[account] > 0) {
+            _tokenOwned[account] = tokenFromReflection(_reflectionOwned[account]);
         }
         _isExcluded[account] = true;
+        excludedIndexes[account] = _excluded.length;
         _excluded.push(account);
     }
 
     function includeUserToReflection(address account) external onlyOwner {
         require(_isExcluded[account], "Account is already excluded");
-        for (uint256 i = 0; i < _excluded.length; i++) {
-            if (_excluded[i] == account) {
-                _excluded[i] = _excluded[_excluded.length - 1];
-                _tOwned[account] = 0;
-                _isExcluded[account] = false;
-                _excluded.pop();
-                break;
-            }
-        }
+        _excluded[excludedIndexes[account]] = _excluded[_excluded.length - 1];
+        _tokenOwned[account] = 0;
+        _isExcluded[account] = false;
+        excludedIndexes[_excluded[_excluded.length - 1]] = excludedIndexes[account];
+        _excluded.pop();
     }
 
     /* Internal Transfer function of Token */
@@ -1469,18 +1476,18 @@ contract SmartContToken is Context, BEP20, Ownable {
         );
         require(recipient != address(0), "BEP20: transfer to the zero address");
         uint256 tokenAmount = 0;
-        bool overMinTokenBalance;
-        bool is_buy;
+        bool overMinTokenBalance = false;
+        bool is_buy = false;
 
         if (
             automatedMarketMakerPairs[sender] &&
             !automatedMarketMakerPairs[recipient]
         ) {
             // is Buy transaction
-            _TAX_FEE = buyItems[1].Tax_Fee;
-            _COMPANY_FEE = buyItems[1].Company_Fee;
-            _MARKETING_FEE = buyItems[1].Marketing_Fee;
-            _POOLGAME_FEE = 0;
+            taxFee_ = buyItems[1].Tax_Fee;
+            companyFee_ = buyItems[1].Company_Fee;
+            marketingFee_ = buyItems[1].Marketing_Fee;
+            poolGameFee_ = 0;
             is_buy = true;
         } else if (
             !automatedMarketMakerPairs[sender] &&
@@ -1491,10 +1498,10 @@ contract SmartContToken is Context, BEP20, Ownable {
                 require(!_checkMaxTransaction(sender, amount), "BEP20: You have exceeded your daily transaction limit.");
             }
             
-            _TAX_FEE = sellItems[1].Tax_Fee;
-            _COMPANY_FEE = sellItems[1].Company_Fee;
-            _MARKETING_FEE = sellItems[1].Marketing_Fee;
-            _POOLGAME_FEE = sellItems[1].PoolGame_Fee;
+            taxFee_ = sellItems[1].Tax_Fee;
+            companyFee_ = sellItems[1].Company_Fee;
+            marketingFee_ = sellItems[1].Marketing_Fee;
+            poolGameFee_ = sellItems[1].PoolGame_Fee;
 
             tokenAmount = _getTokenFeeTotal(amount);
             /* Swap Fee Transactions */
@@ -1508,10 +1515,10 @@ contract SmartContToken is Context, BEP20, Ownable {
             // It is a transaction between users
             if(executeMaxTransaction && !_isExcluded[sender]){
                 if(_checkMaxTransaction(sender, amount)){
-                    _TAX_FEE = sellItems[1].Tax_Fee;
-                    _COMPANY_FEE = sellItems[1].Company_Fee;
-                    _MARKETING_FEE = sellItems[1].Marketing_Fee;
-                    _POOLGAME_FEE = sellItems[1].PoolGame_Fee;
+                    taxFee_ = sellItems[1].Tax_Fee;
+                    companyFee_ = sellItems[1].Company_Fee;
+                    marketingFee_ = sellItems[1].Marketing_Fee;
+                    poolGameFee_ = sellItems[1].PoolGame_Fee;
                 }
             }
         }
@@ -1566,7 +1573,7 @@ contract SmartContToken is Context, BEP20, Ownable {
         uint256 hrs = block.timestamp / 3600 - maxUserSell[userAddr].timestamp / 3600;
         uint256 time = 24;
 
-        if (maxUserSell[userAddr].dailyAmount > _MaxTransaction && hrs < time) {
+        if (maxUserSell[userAddr].dailyAmount > maxTransaction && hrs < time) {
            return true;
         }
 
@@ -1581,140 +1588,140 @@ contract SmartContToken is Context, BEP20, Ownable {
     function _transferToExcluded(
         address sender,
         address recipient,
-        uint256 tAmount
+        uint256 tokenAmount
     ) private {
-        (uint256 rAmount, uint256 rTransferAmount) = _getValues(tAmount);
-        (uint256 tTransferAmount) = _getTransferAmount(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
-        _reflectFee(tAmount);
-        emit Transfer(sender, recipient, tTransferAmount);
+        (uint256 reflectionAmount, uint256 reflectionTransferAmount) = _getValues(tokenAmount);
+        (uint256 tokenTransferAmount) = _getTransferAmount(tokenAmount);
+        _reflectionOwned[sender] = _reflectionOwned[sender].sub(reflectionAmount);
+        _tokenOwned[recipient] = _tokenOwned[recipient].add(tokenTransferAmount);
+        _reflectionOwned[recipient] = _reflectionOwned[recipient].add(reflectionTransferAmount);
+        _reflectFee(tokenAmount);
+        emit Transfer(sender, recipient, tokenTransferAmount);
     }
 
     function _transferFromExcluded(
         address sender,
         address recipient,
-        uint256 tAmount
+        uint256 tokenAmount
     ) private {
-        (uint256 rAmount, uint256 rTransferAmount) = _getValues(tAmount);
-        (uint256 tTransferAmount) = _getTransferAmount(tAmount);
-        _tOwned[sender] = _tOwned[sender].sub(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
-        _reflectFee(tAmount);
-        emit Transfer(sender, recipient, tTransferAmount);
+        (uint256 reflectionAmount, uint256 reflectionTransferAmount) = _getValues(tokenAmount);
+        (uint256 tokenTransferAmount) = _getTransferAmount(tokenAmount);
+        _tokenOwned[sender] = _tokenOwned[sender].sub(tokenAmount);
+        _reflectionOwned[sender] = _reflectionOwned[sender].sub(reflectionAmount);
+        _reflectionOwned[recipient] = _reflectionOwned[recipient].add(reflectionTransferAmount);
+        _reflectFee(tokenAmount);
+        emit Transfer(sender, recipient, tokenTransferAmount);
     }
 
     function _transferBothExcluded(
         address sender,
         address recipient,
-        uint256 tAmount
+        uint256 tokenAmount
     ) private {
-        (uint256 rAmount, uint256 rTransferAmount) = _getValues(tAmount);
-        (uint256 tTransferAmount) = _getTransferAmount(tAmount);
-        _tOwned[sender] = _tOwned[sender].sub(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
-        _reflectFee(tAmount);
-        emit Transfer(sender, recipient, tTransferAmount);
+        (uint256 reflectionAmount, uint256 reflectionTransferAmount) = _getValues(tokenAmount);
+        (uint256 tokenTransferAmount) = _getTransferAmount(tokenAmount);
+        _tokenOwned[sender] = _tokenOwned[sender].sub(tokenAmount);
+        _reflectionOwned[sender] = _reflectionOwned[sender].sub(reflectionAmount);
+        _tokenOwned[recipient] = _tokenOwned[recipient].add(tokenTransferAmount);
+        _reflectionOwned[recipient] = _reflectionOwned[recipient].add(reflectionTransferAmount);
+        _reflectFee(tokenAmount);
+        emit Transfer(sender, recipient, tokenTransferAmount);
     }
 
     function _transferStandard(
         address sender,
         address recipient,
-        uint256 tAmount
+        uint256 tokenAmount
     ) private {
-        (uint256 rAmount, uint256 rTransferAmount) = _getValues(tAmount);
-        (uint256 tTransferAmount) = _getTransferAmount(tAmount);
-        _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
-        _reflectFee(tAmount);
-        emit Transfer(sender, recipient, tTransferAmount);
+        (uint256 reflectionAmount, uint256 reflectionTransferAmount) = _getValues(tokenAmount);
+        (uint256 tokenTransferAmount) = _getTransferAmount(tokenAmount);
+        _reflectionOwned[sender] = _reflectionOwned[sender].sub(reflectionAmount);
+        _reflectionOwned[recipient] = _reflectionOwned[recipient].add(reflectionTransferAmount);
+        _reflectFee(tokenAmount);
+        emit Transfer(sender, recipient, tokenTransferAmount);
     }
 
-    function _reflectFee(uint256 tAmount) private {
-        (uint256 tFee, uint256 tMarketing, uint256 tCompany, uint256 tPoolGame) = _getTValues(tAmount);
-        (uint256 rFee, uint256 rMarketing, uint256 rCompany, uint256 rPoolGame) = _getRValues(
-            tFee,
-            tMarketing,
-            tCompany,
-            tPoolGame
+    function _reflectFee(uint256 tokenAmount) private {
+        (uint256 tokenFee, uint256 tokenMarketing, uint256 tokenCompany, uint256 tokenPoolGame) = _getTValues(tokenAmount);
+        (uint256 reflectionFee, uint256 reflectionMarketing, uint256 reflectionCompany, uint256 reflectionPoolGame) = _getRValues(
+            tokenFee,
+            tokenMarketing,
+            tokenCompany,
+            tokenPoolGame
         );
-        _tFeeTotal = _tFeeTotal.add(tFee);
-        _tMarketingTotal = _tMarketingTotal.add(tMarketing);
-        _tCompanyTotal = _tCompanyTotal.add(tCompany);
-        _tPoolGameTotal = _tPoolGameTotal.add(tPoolGame);
-        _rTotal = _rTotal.sub(rFee).sub(rMarketing).sub(rCompany).sub(rPoolGame);
+        _tokenFeeTotal = _tokenFeeTotal.add(tokenFee);
+        _tokenMarketingTotal = _tokenMarketingTotal.add(tokenMarketing);
+        _tokenCompanyTotal = _tokenCompanyTotal.add(tokenCompany);
+        _tokenPoolGameTotal = _tokenPoolGameTotal.add(tokenPoolGame);
+        relectionTotal = relectionTotal.sub(reflectionFee).sub(reflectionMarketing).sub(reflectionCompany).sub(reflectionPoolGame);
 
-        emit FeeTransaction(tFee, tMarketing, tCompany, tPoolGame);
+        emit FeeTransaction(tokenFee, tokenMarketing, tokenCompany, tokenPoolGame);
     }
 
-    function _executeFeeTransfer(address sender, uint256 tAmount, bool is_buy) private {
-        (, uint256 tMarketing, uint256 tCompany, uint256 tPoolGame) = _getTValues(tAmount);
-        if (tMarketing > 0) {
-            _sendToMarketing(sender, tMarketing, is_buy);
+    function _executeFeeTransfer(address sender, uint256 tokenAmount, bool is_buy) private {
+        (, uint256 tokenMarketing, uint256 tokenCompany, uint256 tokenPoolGame) = _getTValues(tokenAmount);
+        if (tokenMarketing > 0) {
+            _sendToMarketing(sender, tokenMarketing, is_buy);
         }
-        if (tCompany > 0) {
-            _sendToCompany(sender, tCompany, is_buy);
+        if (tokenCompany > 0) {
+            _sendToCompany(sender, tokenCompany, is_buy);
         }
-        if (tPoolGame > 0){
-            _sendToPoolGame(sender, tPoolGame);
+        if (tokenPoolGame > 0){
+            _sendToPoolGame(sender, tokenPoolGame);
         }
     }
 
-    function _sendToMarketing(address sender, uint256 tMarketing, bool is_buy) private {
+    function _sendToMarketing(address sender, uint256 tokenMarketing, bool is_buy) private {
         uint256 currentRate = _getRate();
-        uint256 rMarketing = tMarketing.mul(currentRate);
+        uint256 reflectionMarketing = tokenMarketing.mul(currentRate);
         address MarketingAdd = address(this);
         if(is_buy){
-            MarketingAdd = MarketAddress;
+            MarketingAdd = marketAddress;
         }
-        _rOwned[MarketingAdd] = _rOwned[MarketingAdd].add(rMarketing);
-        _tOwned[MarketingAdd] = _tOwned[MarketingAdd].add(tMarketing);
-        emit Transfer(sender, MarketingAdd, tMarketing);
+        _reflectionOwned[MarketingAdd] = _reflectionOwned[MarketingAdd].add(reflectionMarketing);
+        _tokenOwned[MarketingAdd] = _tokenOwned[MarketingAdd].add(tokenMarketing);
+        emit Transfer(sender, MarketingAdd, tokenMarketing);
     }
 
-    function _sendToCompany(address sender, uint256 tCompany, bool is_buy) private {
+    function _sendToCompany(address sender, uint256 tokenCompany, bool is_buy) private {
         uint256 currentRate = _getRate();
-        uint256 rCompany = tCompany.mul(currentRate);
+        uint256 reflectionCompany = tokenCompany.mul(currentRate);
         address CompanyAdd = address(this);
         if(is_buy){
-            CompanyAdd = CompanyAddress;
+            CompanyAdd = companyAddress;
         }
-        _rOwned[CompanyAdd] = _rOwned[CompanyAdd].add(rCompany);
-        _tOwned[CompanyAdd] = _tOwned[CompanyAdd].add(tCompany);
-        emit Transfer(sender, CompanyAdd, tCompany);
+        _reflectionOwned[CompanyAdd] = _reflectionOwned[CompanyAdd].add(reflectionCompany);
+        _tokenOwned[CompanyAdd] = _tokenOwned[CompanyAdd].add(tokenCompany);
+        emit Transfer(sender, CompanyAdd, tokenCompany);
     }
 
-    function _sendToPoolGame(address sender, uint256 tPoolGame) private {
+    function _sendToPoolGame(address sender, uint256 tokenPoolGame) private {
         uint256 currentRate = _getRate();
-        uint256 rPoolGame = tPoolGame.mul(currentRate);
-        _rOwned[PoolGameAddress] = _rOwned[PoolGameAddress].add(rPoolGame);
-        _tOwned[PoolGameAddress] = _tOwned[PoolGameAddress].add(tPoolGame);
-        emit Transfer(sender, PoolGameAddress, tPoolGame);
+        uint256 reflectionPoolGame = tokenPoolGame.mul(currentRate);
+        _reflectionOwned[poolGameAddress] = _reflectionOwned[poolGameAddress].add(reflectionPoolGame);
+        _tokenOwned[poolGameAddress] = _tokenOwned[poolGameAddress].add(tokenPoolGame);
+        emit Transfer(sender, poolGameAddress, tokenPoolGame);
     }
 
-    function _getValues(uint256 tAmount)
+    function _getValues(uint256 tokenAmount)
         private
         view
         returns (uint256, uint256)
     {
         uint256 currentRate = _getRate();
-        (uint256 tFee, uint256 tMarketing, uint256 tCompany, uint256 tPoolGame) = _getTValues(tAmount);
-        (uint256 rFee, uint256 rMarketing, uint256 rCompany, uint256 rPoolGame) = _getRValues(
-            tFee,
-            tMarketing,
-            tCompany,
-            tPoolGame
+        (uint256 tokenFee, uint256 tokenMarketing, uint256 tokenCompany, uint256 tokenPoolGame) = _getTValues(tokenAmount);
+        (uint256 reflectionFee, uint256 reflectionMarketing, uint256 reflectionCompany, uint256 reflectionPoolGame) = _getRValues(
+            tokenFee,
+            tokenMarketing,
+            tokenCompany,
+            tokenPoolGame
         );
-        uint256 rAmount = tAmount.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rMarketing).sub(rCompany).sub(rPoolGame);
-        return (rAmount, rTransferAmount);
+        uint256 reflectionAmount = tokenAmount.mul(currentRate);
+        uint256 reflectionTransferAmount = reflectionAmount.sub(reflectionFee).sub(reflectionMarketing).sub(reflectionCompany).sub(reflectionPoolGame);
+        return (reflectionAmount, reflectionTransferAmount);
     }
 
-    function _getTValues(uint256 tAmount)
+    function _getTValues(uint256 tokenAmount)
         private
         view
         returns (
@@ -1724,18 +1731,18 @@ contract SmartContToken is Context, BEP20, Ownable {
             uint256
         )
     {
-        uint256 tFee = tAmount.mul(_TAX_FEE).div(100);
-        uint256 tMarketing = tAmount.mul(_MARKETING_FEE).div(100);
-        uint256 tCompany = tAmount.mul(_COMPANY_FEE).div(100);
-        uint256 tPoolGame = tAmount.mul(_POOLGAME_FEE).div(100);
-        return (tFee, tMarketing, tCompany, tPoolGame);
+        uint256 tokenFee = tokenAmount.mul(taxFee_).div(100);
+        uint256 tokenMarketing = tokenAmount.mul(marketingFee_).div(100);
+        uint256 tokenCompany = tokenAmount.mul(companyFee_).div(100);
+        uint256 tokenPoolGame = tokenAmount.mul(poolGameFee_).div(100);
+        return (tokenFee, tokenMarketing, tokenCompany, tokenPoolGame);
     }
 
     function _getRValues(
-        uint256 tFee,
-        uint256 tMarketing,
-        uint256 tCompany,
-        uint256 tPoolGame
+        uint256 tokenFee,
+        uint256 tokenMarketing,
+        uint256 tokenCompany,
+        uint256 tokenPoolGame
     )
         private
         view
@@ -1747,54 +1754,54 @@ contract SmartContToken is Context, BEP20, Ownable {
         )
     {
         uint256 currentRate = _getRate();
-        uint256 rFee = tFee.mul(currentRate);
-        uint256 rMarketing = tMarketing.mul(currentRate);
-        uint256 rCompany = tCompany.mul(currentRate);
-        uint256 rPoolGame = tPoolGame.mul(currentRate);
-        return (rFee, rMarketing, rCompany, rPoolGame);
+        uint256 reflectionFee = tokenFee.mul(currentRate);
+        uint256 reflectionMarketing = tokenMarketing.mul(currentRate);
+        uint256 reflectionCompany = tokenCompany.mul(currentRate);
+        uint256 reflectionPoolGame = tokenPoolGame.mul(currentRate);
+        return (reflectionFee, reflectionMarketing, reflectionCompany, reflectionPoolGame);
     }
 
-    function _getTransferAmount(uint256 tAmount)
+    function _getTransferAmount(uint256 tokenAmount)
         private
         view
         returns (
             uint256
         )
     {
-        (uint256 tFee, uint256 tMarketing, uint256 tCompany, uint256 tPoolGame) = _getTValues(tAmount);
-        uint256 tTransferAmount = tAmount.sub(tFee).sub(tMarketing).sub(tCompany).sub(tPoolGame);
-        return (tTransferAmount);
+        (uint256 tokenFee, uint256 tokenMarketing, uint256 tokenCompany, uint256 tokenPoolGame) = _getTValues(tokenAmount);
+        uint256 tokenTransferAmount = tokenAmount.sub(tokenFee).sub(tokenMarketing).sub(tokenCompany).sub(tokenPoolGame);
+        return (tokenTransferAmount);
     }
 
     function _getRate() private view returns (uint256) {
-        (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
-        return rSupply.div(tSupply);
+        (uint256 reflectionSupply, uint256 tokenSupply) = _getCurrentSupply();
+        return reflectionSupply.div(tokenSupply);
     }
 
     function _getCurrentSupply() private view returns (uint256, uint256) {
-        uint256 rSupply = _rTotal;
-        uint256 tSupply = _tTotal;
+        uint256 reflectionSupply = relectionTotal;
+        uint256 tokenSupply = TOKENTOTAL;
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (
-                _rOwned[_excluded[i]] > rSupply ||
-                _tOwned[_excluded[i]] > tSupply
-            ) return (_rTotal, _tTotal);
-            rSupply = rSupply.sub(_rOwned[_excluded[i]]);
-            tSupply = tSupply.sub(_tOwned[_excluded[i]]);
+                _reflectionOwned[_excluded[i]] > reflectionSupply ||
+                _tokenOwned[_excluded[i]] > tokenSupply
+            ) return (relectionTotal, TOKENTOTAL);
+            reflectionSupply = reflectionSupply.sub(_reflectionOwned[_excluded[i]]);
+            tokenSupply = tokenSupply.sub(_tokenOwned[_excluded[i]]);
         }
-        if (rSupply < _rTotal.div(_tTotal)) return (_rTotal, _tTotal);
-        return (rSupply, tSupply);
+        if (reflectionSupply < relectionTotal.div(TOKENTOTAL)) return (relectionTotal, TOKENTOTAL);
+        return (reflectionSupply, tokenSupply);
     }
 
     function removeAllFee() private {
         if (
-            _TAX_FEE == 0 && _MARKETING_FEE == 0 && _COMPANY_FEE == 0 ||
-            _TAX_FEE == 0 && _MARKETING_FEE == 0 && _COMPANY_FEE == 0 && _POOLGAME_FEE == 0
+            taxFee_ == 0 && marketingFee_ == 0 && companyFee_ == 0 ||
+            taxFee_ == 0 && marketingFee_ == 0 && companyFee_ == 0 && poolGameFee_ == 0
         ) return;
-        _TAX_FEE = 0;
-        _MARKETING_FEE = 0;
-        _COMPANY_FEE = 0;
-        _POOLGAME_FEE = 0; 
+        taxFee_ = 0;
+        marketingFee_ = 0;
+        companyFee_ = 0;
+        poolGameFee_ = 0; 
     }
 
     /*
@@ -1802,27 +1809,29 @@ contract SmartContToken is Context, BEP20, Ownable {
      * @dev Management System fee Buy
      */
     function createBuyFee(
-        uint256 _txFee,
-        uint256 _MarketingFee,
-        uint256 _CompanyFee
+        uint256 txFee,
+        uint256 marketingFee,
+        uint256 companyFee
     ) public onlyOwner {
         require(!buyItems[1].exist, "A fee already exists, created");
+        require((txFee.add(marketingFee).add(companyFee)) <= 25, "Total fees should not be more than 25%.");
         uint256 _buyId = 1;
-        buyItems[_buyId].Tax_Fee = _txFee;
-        buyItems[_buyId].Company_Fee = _MarketingFee;
-        buyItems[_buyId].Marketing_Fee = _CompanyFee;
+        buyItems[_buyId].Tax_Fee = txFee;
+        buyItems[_buyId].Company_Fee = marketingFee;
+        buyItems[_buyId].Marketing_Fee = companyFee;
         buyItems[_buyId].exist = true;
     }
 
     function updateBuyFee(
-        uint256 _txFee,
-        uint256 _MarketingFee,
-        uint256 _CompanyFee
+        uint256 txFee,
+        uint256 marketingFee,
+        uint256 companyFee
     ) public onlyOwner {
+        require((txFee.add(marketingFee).add(companyFee)) <= 25, "Total fees should not be more than 25%.");        
         BuyFee storage item = buyItems[1];
-        item.Tax_Fee = _txFee;
-        item.Marketing_Fee = _MarketingFee;
-        item.Company_Fee = _CompanyFee;
+        item.Tax_Fee = txFee;
+        item.Marketing_Fee = marketingFee;
+        item.Company_Fee = companyFee;
     }
 
     /*
@@ -1832,10 +1841,10 @@ contract SmartContToken is Context, BEP20, Ownable {
         public
         view
         returns (
-            uint256 _txFee,
-            uint256 _MarketingFee,
-            uint256 _CompanyFee,
-            bool _exist
+            uint256 txFee,
+            uint256 marketingFee,
+            uint256 companyFee,
+            bool exist
         )
     {
         return (
@@ -1851,31 +1860,33 @@ contract SmartContToken is Context, BEP20, Ownable {
      * @dev Management System fee Sell
      */
     function createSellFee(
-        uint256 _txFee,
-        uint256 _MarketingFee,
-        uint256 _CompanyFee,
-        uint256 _PoolGameFee
+        uint256 txFee,
+        uint256 marketingFee,
+        uint256 companyFee,
+        uint256 poolGameFee
     ) public onlyOwner {
         require(!sellItems[1].exist, "A fee already exists, created");
+        require((txFee.add(marketingFee).add(companyFee).add(poolGameFee)) <= 25, "Total fees should not be more than 25%.");
         uint256 _sellId = 1;
-        sellItems[_sellId].Tax_Fee = _txFee;
-        sellItems[_sellId].Marketing_Fee = _MarketingFee;
-        sellItems[_sellId].Company_Fee = _CompanyFee;
-        sellItems[_sellId].PoolGame_Fee = _PoolGameFee;
+        sellItems[_sellId].Tax_Fee = txFee;
+        sellItems[_sellId].Marketing_Fee = marketingFee;
+        sellItems[_sellId].Company_Fee = companyFee;
+        sellItems[_sellId].PoolGame_Fee = poolGameFee;
         sellItems[_sellId].exist = true;
     }
 
     function updateSellFee(
-        uint256 _txFee,
-        uint256 _MarketingFee,
-        uint256 _CompanyFee,
-        uint256 _PoolGameFee
+        uint256 txFee,
+        uint256 marketingFee,
+        uint256 companyFee,
+        uint256 poolGameFee
     ) public onlyOwner {
+        require((txFee.add(marketingFee).add(companyFee).add(poolGameFee)) <= 25, "Total fees should not be more than 25%.");
         SellFee storage item = sellItems[1];
-        item.Tax_Fee = _txFee;
-        item.Marketing_Fee = _MarketingFee;
-        item.Company_Fee = _CompanyFee;
-        item.PoolGame_Fee = _PoolGameFee;
+        item.Tax_Fee = txFee;
+        item.Marketing_Fee = marketingFee;
+        item.Company_Fee = companyFee;
+        item.PoolGame_Fee = poolGameFee;
     }
 
     /*
@@ -1885,11 +1896,11 @@ contract SmartContToken is Context, BEP20, Ownable {
         public
         view
         returns (
-            uint256 _txFee,
-            uint256 _MarketingFee,
-            uint256 _CompanyFee,
-            uint256 _PoolGameFee,
-            bool _exist
+            uint256 txFee,
+            uint256 marketingFee,
+            uint256 companyFee,
+            uint256 poolGameFee,
+            bool exist
         )
     {
         return (
@@ -1929,16 +1940,16 @@ contract SmartContToken is Context, BEP20, Ownable {
         uint256 otherHalf = withAmount.sub(half);
 
         if (half != 0) {
-            _sendFeeBNB(CompanyAddress, half);
+            _sendFeeBNB(companyAddress, half);
         }
 
         if (otherHalf != 0) {
-            _sendFeeBNB(MarketAddress, otherHalf);
+            _sendFeeBNB(marketAddress, otherHalf);
         }
     }
 
     function _getTokenFeeTotal(uint256 amount) private view returns (uint256) {
-        uint256 tokenFee = _COMPANY_FEE.add(_MARKETING_FEE);
+        uint256 tokenFee = companyFee_.add(marketingFee_);
         uint256 tokenAmount = amount.mul(tokenFee).div(100);
         return tokenAmount;
     }
@@ -1951,12 +1962,12 @@ contract SmartContToken is Context, BEP20, Ownable {
         emit BNBWithdrawn(recipient, withAmount);
     }
 
-    function executeAutoTransferFee(uint256 tokemAmount) external onlyOwner {
+    function executeAutoTransferFee(uint256 amountToken) external onlyOwner {
         require(
-            tokemAmount < balanceOf(address(this)),
+            amountToken < balanceOf(address(this)),
             "Insufficient balance for this transaction."
         );
-        _swapAndTransferFee(tokemAmount);
+        _swapAndTransferFee(amountToken);
     }
 
     /* Function     : Set a new router if released  */
@@ -1981,16 +1992,21 @@ contract SmartContToken is Context, BEP20, Ownable {
         emit SetAutomatedMarketMakerPair(pair, value);
     }
 
-    function setCompanyAdress(address _CompanyAddress) public onlyOwner {
-        CompanyAddress = _CompanyAddress;
+    function setCompanyAdress(address companyAddress_) public onlyOwner {
+        require(companyAddress != companyAddress_, "This is the same company address.");
+        companyAddress = companyAddress_;
     }
 
-    function setMarketingAdress(address _MarketingAddress) public onlyOwner {
-        MarketAddress = _MarketingAddress;
+    function setMarketingAdress(address marketingAddress_) public onlyOwner {
+        require(marketAddress != marketingAddress_, "This is the same market address.");
+        marketAddress = marketingAddress_;
     }
 
-    function setMaxTransaction(uint256 amount_BNB) public onlyOwner {
-        _MaxTransaction = amount_BNB;
+    function setMaxTransaction(uint256 amountBNB) public onlyOwner {
+        require(amountBNB >= 2 ether, "Cannot set less than 2 BNB.");
+        uint256 prevAmount = maxTransaction;
+        maxTransaction = amountBNB;
+        emit SetMaxTransaction(prevAmount, amountBNB);
     }
 
     function setExecuteMaxTransaction() external onlyOwner {
@@ -2011,13 +2027,17 @@ contract SmartContToken is Context, BEP20, Ownable {
         returns (uint256)
     {
         require(amount > 0, "Value is Invalid");
-        IUniswapV2Pair _tokenPair = IUniswapV2Pair(_TokenReserv);
-        if (_bnb_Address == _tokenPair.token0()) {
-            (uint256 ResBNB, uint256 ResTOKEN, ) = _tokenPair.getReserves();
+        IUniswapV2Pair _tokenPair = IUniswapV2Pair(tokenReserv);
+
+        uint256 ResBNB = 0;
+        uint256 ResTOKEN = 0;
+
+        if (bnbAddress == _tokenPair.token0()) {
+            (ResBNB, ResTOKEN, ) = _tokenPair.getReserves();
             uint256 pricebnb = ResTOKEN.div(ResBNB);
             return amount.div(pricebnb); //return amount of BNB needed to Transaction
         } else {
-            (uint256 ResTOKEN, uint256 ResBNB, ) = _tokenPair.getReserves();
+            (ResTOKEN, ResBNB, ) = _tokenPair.getReserves();
             uint256 pricebnb = ResTOKEN.div(ResBNB);
             return amount.div(pricebnb); //return amount of BNB needed to Transaction
         }
@@ -2052,5 +2072,6 @@ contract SmartContToken is Context, BEP20, Ownable {
     event SetRouterAddressEvent(address value);
     event FeeTransaction(uint256 tFee, uint256 tMarketing, uint256 tCompany, uint256 tPoolGame);
     event BNBWithdrawn(address beneficiary, uint256 value);
+    event SetMaxTransaction(uint256 prevAmount, uint256 amountBNB);
     event SetAutomatedMarketMakerPair(address indexed pair, bool indexed value);
 }
