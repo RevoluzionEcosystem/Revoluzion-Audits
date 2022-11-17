@@ -1196,7 +1196,6 @@ contract SmartContToken is Context, BEP20, Ownable {
 
     mapping(address => uint256) private _reflectionOwned;
     mapping(address => uint256) private _tokenOwned;
-    mapping(address => mapping(address => uint256)) private allowances;
 
     //Include or WhiteList to fee
     mapping(address => bool) private _isWhiteList;
@@ -1351,10 +1350,6 @@ contract SmartContToken is Context, BEP20, Ownable {
 
     function decimalFactor() public pure returns (uint256) {
         return DECIMALFACTOR;
-    }
-
-    function allowance(address owner_, address spender_) public override view returns (uint256) {
-        return allowances[owner_][spender_];
     }
 
     function totalBalance() external view returns (uint256) {
