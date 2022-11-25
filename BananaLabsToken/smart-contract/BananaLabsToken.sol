@@ -639,7 +639,7 @@ contract BananaLabsToken is IReflectionERC20Extended, Auth {
     uint256 public buybackMultiplierLength = 30 minutes;
     uint256 public buybackMultiplierTriggeredAt;
     
-    bool inSwap;
+    bool internal inSwap;
     bool public swapEnabled = false;
     uint256 public swapThreshold;
 
