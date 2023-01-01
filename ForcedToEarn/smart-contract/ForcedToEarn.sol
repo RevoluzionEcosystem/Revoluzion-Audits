@@ -993,6 +993,11 @@ contract ForcedToEarn is Auth, IERC20 {
     // FUNCTION
 
     /**
+     * @dev Accept native into smart contract.
+     */
+     receive() external payable {}
+
+    /**
      * @dev Initiate to set all required settings right after the presale was finalized.
      */
     function finalizePresale() external onlyOwner {
