@@ -617,7 +617,7 @@ contract Staking is Auth, IStaking, Pausable {
     /**
      * @dev Enable/disable user to trigger emergency withdraw.
      */
-    function allowmErgencyWithdraw(bool allow) external authorized {
+    function allowEmergencyWithdraw(bool allow) external authorized {
         require(emergencyWithdraw != allow, "Enable Emergency Withdraw: Cannot set the same state.");
         emergencyWithdraw = allow;
     }
@@ -656,7 +656,7 @@ contract Staking is Auth, IStaking, Pausable {
      * @dev Allow user to unstake their token.
      */
     function unstake(uint256 amount, uint256 index) external initializer {
-        require(userStakes[_msgSender()][index].stakePrice >= checkTokenPrice(), "Unstake: Cannot unstake below token price when staked.");
+        require(userStakes[_msgSender()][index].stakePrice <= checkTokenPrice(), "Unstake: Cannot unstake below token price when staked.");
         _unstake(amount, index, false);
     }
 
