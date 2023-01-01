@@ -24,6 +24,18 @@ library SafeMath {
             return (true, a - b);
         }
     }
+    
+    /**
+     * @dev Returns the division of two unsigned integers, with a division by zero flag.
+     *
+     * _Available since v3.4._
+     */
+    function tryDiv(uint256 a, uint256 b) internal pure returns (bool, uint256) {
+        unchecked {
+            if (b == 0) return (false, 0);
+            return (true, a / b);
+        }
+    }
 
     /**
      * @dev Returns the addition of two unsigned integers, reverting on
@@ -515,7 +527,6 @@ contract Staking is Auth, IStaking, Pausable {
     bool public initialized = false;
     bool public emergencyWithdraw = false;
     
-    uint256 public balanceStart = 0;
     uint256 public balanceSwapped = 0;
     uint256 public penaltyNumerator = 10;
     uint256 public penaltyDenominator = 100;
@@ -605,7 +616,7 @@ contract Staking is Auth, IStaking, Pausable {
      */
     function updatePenaltyReceiver(address newReceiver) external authorized {
         require(newReceiver != ZERO, "Update Penalty Receiver: Cannot set penalty receiver as null address.");
-        require(newReceiver != DEAD, "Update Penalty Receiver: Cannot set penalty recceiver as dead address.");
+        require(newReceiver != DEAD, "Update Penalty Receiver: Cannot set penalty receiver as dead address.");
         require(penaltyReceiver != newReceiver, "Update Penalty Receiver: Cannot set the same address.");
         penaltyReceiver = newReceiver;
     }
@@ -670,8 +681,9 @@ contract Staking is Auth, IStaking, Pausable {
      * @dev Logic for unstaking.
      */
     function _unstake(uint256 amount, uint256 index, bool takePenalty) internal {
-        require(index <= userStaking[_msgSender()], "Unstake: There no stake token at this index.");
+        require(index <= userStaking[_msgSender()], "Unstake: There no token staked at this index.");
         require(amount <= userStakes[_msgSender()][index].stakeAmount, "Unstake: Amount cannot exceed the total token staked at this index.");
+        require(userStakes[_msgSender()][index].stakeAmount > 0, "Unstake: There's no stake token at this index.");
 
         uint256 unpaidEarning = handleDistribution(_msgSender(), amount);
 
@@ -744,6 +756,7 @@ contract Staking is Auth, IStaking, Pausable {
      */
     function depositStuckedBNB() external {
         uint256 amount = address(this).balance;
+        updateRewards();
         handleDeposits(amount);
     }
 
@@ -751,15 +764,12 @@ contract Staking is Auth, IStaking, Pausable {
      * @dev Handle deposits for rewards.
      */
     function handleDeposits(uint256 amount) internal {
-        (, uint256 oneToken) = uint256(10).tryPow(token.decimals());
-
         address[] memory path = new address[](2);
         path[0] = router.WETH();
         path[1] = address(rewardToken);
 
-        balanceStart = rewardToken.balanceOf(address(this));
-        uint256[] memory prices = router.getAmountsOut(oneToken, path);
-        balanceSwapped = prices[2];
+        uint256[] memory prices = router.getAmountsOut(amount, path);
+        balanceSwapped = prices[1];
 
         router.swapExactETHForTokensSupportingFeeOnTransferTokens {
             value: amount
@@ -804,10 +814,11 @@ contract Staking is Auth, IStaking, Pausable {
      * @dev Trigger update for reward information.
      */
     function updateRewards() public {
-        uint256 amount = balanceSwapped.sub(balanceStart);        
-        if (amount > 0) {
-            totalRewards = totalRewards.add(amount);
-            rewardsPerStake = rewardsPerStake.add(rewardsPerStakeAccuracyFactor.mul(amount).div(totalStaked));
+        if (balanceSwapped > 0) {
+            totalRewards = totalRewards.add(balanceSwapped);
+            (, uint256 addition) = rewardsPerStakeAccuracyFactor.mul(balanceSwapped).tryDiv(totalStaked);
+            rewardsPerStake = rewardsPerStake.add(addition);
+            balanceSwapped = 0;
         }
     }
 
