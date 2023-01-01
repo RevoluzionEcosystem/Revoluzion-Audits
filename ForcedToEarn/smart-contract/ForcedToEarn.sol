@@ -1411,7 +1411,7 @@ contract ForcedToEarn is Auth, IERC20 {
         swapStaking(firstRewardReceiver, amountBNBFirstReward);
         swapStaking(secondRewardReceiver, amountBNBSecondReward);
 
-        bool shouldAddLiquidity = dynamicLiquidityFee > 0;
+        (bool shouldAddLiquidity, ) = amountToken.trySub(0);
 
         if (shouldAddLiquidity && autoAddLiquidity) {
             (amountToken, amountETH, ) = router.addLiquidityETH{
@@ -1429,7 +1429,7 @@ contract ForcedToEarn is Auth, IERC20 {
             value: amount
         } () {} catch {}
 
-        IStaking(rewardReceiver).updateRewards;
+        try IStaking(rewardReceiver).updateRewards() {} catch {}
 
     }
     
