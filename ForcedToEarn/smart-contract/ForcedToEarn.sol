@@ -515,6 +515,7 @@ contract Staking is Auth, IStaking, Pausable {
     bool public initialized = false;
     bool public emergencyWithdraw = false;
     
+    uint256 public balanceStart = 0;
     uint256 public balanceSwapped = 0;
     uint256 public penaltyNumerator = 10;
     uint256 public penaltyDenominator = 100;
@@ -555,7 +556,7 @@ contract Staking is Auth, IStaking, Pausable {
     /**
      * @dev Accept native into smart contract.
      */
-     receive() external payable {}
+    receive() external payable {}
 
     /**
      * @dev Pause smart contract.
@@ -734,15 +735,7 @@ contract Staking is Auth, IStaking, Pausable {
      * @dev Deposit BNB into contract to be swap into reward token.
      */
     function deposit() external payable {
-        
-        uint256 amount = rewardToken.balanceOf(address(this)).sub(balanceSwapped);
-        
-        if (amount > 0) {
-            totalRewards = totalRewards.add(amount);
-            rewardsPerStake = rewardsPerStake.add(rewardsPerStakeAccuracyFactor.mul(amount).div(totalStaked));
-        }
-
-        balanceSwapped = amount;
+        updateRewards();
         handleDeposits(_msgValue());
     }
 
@@ -758,9 +751,15 @@ contract Staking is Auth, IStaking, Pausable {
      * @dev Handle deposits for rewards.
      */
     function handleDeposits(uint256 amount) internal {
+        (, uint256 oneToken) = uint256(10).tryPow(token.decimals());
+
         address[] memory path = new address[](2);
         path[0] = router.WETH();
         path[1] = address(rewardToken);
+
+        balanceStart = rewardToken.balanceOf(address(this));
+        uint256[] memory prices = router.getAmountsOut(oneToken, path);
+        balanceSwapped = prices[2];
 
         router.swapExactETHForTokensSupportingFeeOnTransferTokens {
             value: amount
@@ -804,12 +803,12 @@ contract Staking is Auth, IStaking, Pausable {
     /**
      * @dev Trigger update for reward information.
      */
-    function updateRewards() external {
-        uint256 amount = rewardToken.balanceOf(address(this)).sub(balanceSwapped);
-        require(amount > 0, "Update Rewards: Rewards are up to date.");
-    
-        totalRewards = totalRewards.add(amount);
-        rewardsPerStake = rewardsPerStake.add(rewardsPerStakeAccuracyFactor.mul(amount).div(totalStaked));
+    function updateRewards() public {
+        uint256 amount = balanceSwapped.sub(balanceStart);        
+        if (amount > 0) {
+            totalRewards = totalRewards.add(amount);
+            rewardsPerStake = rewardsPerStake.add(rewardsPerStakeAccuracyFactor.mul(amount).div(totalStaked));
+        }
     }
 
     /**
@@ -890,11 +889,12 @@ contract ForcedToEarn is Auth, IERC20 {
     uint256 private constant FEEDENOMINATOR = 100;
     uint256 private constant MAX = type(uint256).max;
 
-    address public pair;
-    address public autoLiquidityReceiver;
-    address public marketingReceiver;
-    address public firstRewardReceiver;
-    address public secondRewardReceiver;
+    string private constant NAME = "Forced To Earn";
+    string private constant SYMBOL = "F2E";
+
+    uint8 private _decimals;
+        
+    uint256 private _totalSupply;
 
     uint256 public liquidityFee = 0;
     uint256 public buybackFee = 0;
@@ -919,16 +919,16 @@ contract ForcedToEarn is Auth, IERC20 {
 
     bool public autoAddLiquidity = false;
     bool public autoBuybackEnabled = false;
+    bool public autoBuybackMultiplierEnabled = false;
     bool public inSwap = false;
     bool public swapEnabled = false;
     bool public presaleFinalized = false;
 
-    string private _name;
-    string private _symbol;
-
-    uint8 private _decimals;
-        
-    uint256 private _totalSupply;
+    address public pair;
+    address public autoLiquidityReceiver;
+    address public marketingReceiver;
+    address public firstRewardReceiver;
+    address public secondRewardReceiver;
 
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
@@ -937,8 +937,6 @@ contract ForcedToEarn is Auth, IERC20 {
     // CONSTRUCTOR
 
     constructor(
-        string memory name_,
-        string memory symbol_,
         uint8 decimals_,
         uint256 supplyTotal_,
         address firstReward,
@@ -955,8 +953,6 @@ contract ForcedToEarn is Auth, IERC20 {
         require(marketing != ZERO, "Forced To Earn: Cannot set marketing receiver as null address.");
         require(marketing != DEAD, "Forced To Earn: Cannot set marketing recceiver as dead address.");
 
-        _name = name_;
-        _symbol = symbol_;
         _decimals = decimals_;
 
         (, uint256 exponentiation) = uint256(10).tryPow(decimals_);
@@ -992,7 +988,6 @@ contract ForcedToEarn is Auth, IERC20 {
 
     // EVENT
     
-    event AutoLiquify(uint256 amountBNB, uint256 amountBOG);
     event BuybackMultiplierActive(uint256 duration);
 
     // FUNCTION
@@ -1000,7 +995,7 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Accept native into smart contract.
      */
-     receive() external payable {}
+    receive() external payable {}
 
     /**
      * @dev Initiate to set all required settings right after the presale was finalized.
@@ -1050,15 +1045,15 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev ERC20 standard: Display token name.
      */
-    function name() external view returns (string memory) {
-        return _name;
+    function name() external pure returns (string memory) {
+        return NAME;
     }
     
     /**
      * @dev ERC20 standard: Display token symbol.
      */
-    function symbol() external view returns (string memory) {
-        return _symbol;
+    function symbol() external pure returns (string memory) {
+        return SYMBOL;
     }
     
     /**
@@ -1384,6 +1379,7 @@ contract ForcedToEarn is Auth, IERC20 {
             if (autoBuybackAccumulator > autoBuybackCap) {
                 autoBuybackEnabled = false;
             }
+            _buyback(autoBuybackAmount, autoBuybackMultiplierEnabled);
         }
 
         address[] memory path = new address[](2);
@@ -1400,35 +1396,30 @@ contract ForcedToEarn is Auth, IERC20 {
         (uint256 amountETH, uint256 amountBNBMarketing, uint256 amountBNBFirstReward, uint256 amountBNBSecondReward) = swapDistribution(amountBNB, dynamicLiquidityFee, totalBNBFee);
 
         payable(marketingReceiver).transfer(amountBNBMarketing);
+        
+        swapStaking(firstRewardReceiver, amountBNBFirstReward);
+        swapStaking(secondRewardReceiver, amountBNBSecondReward);
 
-        try IStaking(firstRewardReceiver).deposit {
-            value: amountBNBFirstReward
-        } () {} catch {}
+        bool shouldAddLiquidity = dynamicLiquidityFee > 0;
 
-        try IStaking(secondRewardReceiver).deposit {
-            value: amountBNBSecondReward
-        } () {} catch {}
-
-        IStaking(firstRewardReceiver).updateRewards;
-        IStaking(secondRewardReceiver).updateRewards;
-
-        if (shouldAutoBuyback()) {
-            address[] memory pathBuyBack = new address[](2);
-            pathBuyBack[0] = router.WETH();
-            pathBuyBack[1] = address(this);
-
-            router.swapExactETHForTokensSupportingFeeOnTransferTokens {
-                value: autoBuybackAmount
-            } (0, pathBuyBack, DEAD, block.timestamp);
-        }
-
-        (bool nonZero, ) = SafeMath.trySub(amountToken, 0);
-
-        if (nonZero) {
+        if (shouldAddLiquidity && autoAddLiquidity) {
             (amountToken, amountETH, ) = router.addLiquidityETH{
                 value: amountETH
             } (address(this), amountToken, 0, 0, autoLiquidityReceiver, block.timestamp);
         }
+    }
+
+    /**
+     * @dev Staking swap logic.
+     */
+    function swapStaking(address rewardReceiver, uint256 amount) internal {
+
+        try IStaking(rewardReceiver).deposit {
+            value: amount
+        } () {} catch {}
+
+        IStaking(rewardReceiver).updateRewards;
+
     }
     
     // Liquidity related functions
@@ -1467,6 +1458,13 @@ contract ForcedToEarn is Auth, IERC20 {
      * @dev Allow buyback and burn the token using funds stucked in smart contract.
      */
     function triggerManualBuyback(uint256 amount, bool triggerBuybackMultiplier) external authorized {
+        _buyback(amount, triggerBuybackMultiplier);
+    }
+
+    /**
+     * @dev Buyback and burn logic.
+     */
+    function _buyback(uint256 amount, bool triggerBuybackMultiplier) internal {
         require(msg.sender != DEAD, "Trigger Manual Buyback: Caller cannot be the receiver.");
 
         if (triggerBuybackMultiplier) {
@@ -1486,8 +1484,9 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Set the settings for buyback automation.
      */
-    function setAutoBuybackSettings(bool enabled, uint256 cap, uint256 amount, uint256 period) external authorized {
+    function setAutoBuybackSettings(bool enabled, bool multiplier, uint256 cap, uint256 amount, uint256 period) external authorized {
         autoBuybackEnabled = enabled;
+        autoBuybackMultiplierEnabled = multiplier;
         autoBuybackCap = cap;
         autoBuybackAccumulator = 0;
         autoBuybackAmount = amount;
