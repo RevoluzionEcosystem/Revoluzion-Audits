@@ -553,6 +553,11 @@ contract Staking is Auth, IStaking, Pausable {
     // FUNCTION
 
     /**
+     * @dev Accept native into smart contract.
+     */
+     receive() external payable {}
+
+    /**
      * @dev Pause smart contract.
      */
     function pause() external whenNotPaused authorized {
