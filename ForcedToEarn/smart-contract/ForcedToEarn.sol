@@ -1186,10 +1186,6 @@ contract ForcedToEarn is Auth, IERC20 {
         ) {
             return _basicTransfer(from, to, amount);
         }
-        
-        if (shouldSwapBack()) {
-            swapBack();
-        }
 
         uint256 amountReceived = shouldTakeFee(from) ? takeFee(from, to, amount) : amount;
 
@@ -1200,6 +1196,10 @@ contract ForcedToEarn is Auth, IERC20 {
         }
 
         emit Transfer(from, to, amount);
+        
+        if (shouldSwapBack()) {
+            swapBack();
+        }
 
         return true;
     }
@@ -1235,6 +1235,13 @@ contract ForcedToEarn is Auth, IERC20 {
      */
     function shouldSwapBack() internal view returns (bool) {
         return _msgSender() != pair && !inSwap && swapEnabled && _balances[address(this)] >= swapThreshold;
+    }
+    
+    /**
+     * @dev Check if should trigger add liquidity.
+     */
+    function shouldAddLiquidity() internal view returns (bool) {
+        return autoAddLiquidity && !inSwap && _msgSender() != pair;
     }
 
     /**
@@ -1365,12 +1372,11 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Check distribution for swap back.
      */
-    function swapDistribution(uint256 amountBNB, uint256 dynamicLiquidityFee, uint256 totalBNBFee) internal view returns (uint256, uint256, uint256, uint256) {
-        uint256 amountBNBLiquidity = amountBNB.mul(dynamicLiquidityFee).div(totalBNBFee).div(2);
+    function swapDistribution(uint256 amountBNB, uint256 totalBNBFee) internal view returns (uint256, uint256, uint256) {
         uint256 amountBNBMarketing = amountBNB.mul(marketingFee).div(totalBNBFee);
         uint256 amountBNBReward = amountBNB.mul(rewardFee).div(totalBNBFee);
         (uint256 amountBNBFirstReward, uint256 amountBNBSecondReward) = rewardDistribution(amountBNB, totalBNBFee, amountBNBReward);
-        return (amountBNBLiquidity, amountBNBMarketing, amountBNBFirstReward, amountBNBSecondReward);
+        return (amountBNBMarketing, amountBNBFirstReward, amountBNBSecondReward);
     }
 
     /**
@@ -1379,11 +1385,12 @@ contract ForcedToEarn is Auth, IERC20 {
     function swapBack() internal swapping {        
         uint256 dynamicLiquidityFee = isOverLiquified(targetLiquidityDenominator, targetLiquidity) ? 0 : liquidityFee;
         uint256 amountToken = swapThreshold.mul(dynamicLiquidityFee).div(totalFee).div(2);
-        uint256 amountToSwap = swapThreshold.sub(amountToken);
+        uint256 amountToSwap = swapThreshold;
 
-        require(firstRewardReceiver != msg.sender, "Swap Back: Caller cannot be the First Reward Receiver.");
-        require(secondRewardReceiver != msg.sender, "Swap Back: Caller cannot be the Second Reward Receiver.");
-        
+        if (shouldAddLiquidity()) {
+            amountToSwap = amountToSwap.sub(amountToken);
+        }
+
         if (shouldAutoBuyback()) {
             autoBuybackBlockLast = block.number;
             autoBuybackAccumulator = autoBuybackAccumulator.add(autoBuybackAmount);
@@ -1397,25 +1404,31 @@ contract ForcedToEarn is Auth, IERC20 {
         path[0] = address(this);
         path[1] = router.WETH();
         uint256 balanceBefore = address(this).balance;
-
         router.swapExactTokensForETHSupportingFeeOnTransferTokens(amountToSwap, 0, path, address(this), block.timestamp);
-
         uint256 amountBNB = address(this).balance.sub(balanceBefore);
 
-        uint256 totalBNBFee = totalFee.sub(dynamicLiquidityFee.div(2));
+        uint256 totalBNBFee = totalFee;
 
-        (uint256 amountETH, uint256 amountBNBMarketing, uint256 amountBNBFirstReward, uint256 amountBNBSecondReward) = swapDistribution(amountBNB, dynamicLiquidityFee, totalBNBFee);
+        if (shouldAddLiquidity()) {
+            totalBNBFee = totalBNBFee.sub(dynamicLiquidityFee.div(2));
+        } else {
+            totalBNBFee = totalBNBFee.sub(liquidityFee);
+        }
+        
+        (uint256 amountBNBMarketing, uint256 amountBNBFirstReward, uint256 amountBNBSecondReward) = swapDistribution(amountBNB, totalBNBFee);
 
         payable(marketingReceiver).transfer(amountBNBMarketing);
         
         swapStaking(firstRewardReceiver, amountBNBFirstReward);
         swapStaking(secondRewardReceiver, amountBNBSecondReward);
 
-        (bool shouldAddLiquidity, ) = amountToken.trySub(0);
+        //(bool shouldAddLiquidity, ) = amountToken.trySub(0);
 
-        if (shouldAddLiquidity && autoAddLiquidity) {
-            (amountToken, amountETH, ) = router.addLiquidityETH{
-                value: amountETH
+        if (shouldAddLiquidity()) {
+            uint256 amountBNBLiquidity = amountBNB.mul(dynamicLiquidityFee).div(totalBNBFee).div(2);
+
+            (amountToken, amountBNBLiquidity, ) = router.addLiquidityETH{
+                value: amountBNBLiquidity
             } (address(this), amountToken, 0, 0, autoLiquidityReceiver, block.timestamp);
         }
     }
