@@ -1186,6 +1186,10 @@ contract ForcedToEarn is Auth, IERC20 {
         ) {
             return _basicTransfer(from, to, amount);
         }
+        
+        if (shouldSwapBack()) {
+            swapBack();
+        }
 
         uint256 amountReceived = shouldTakeFee(from) ? takeFee(from, to, amount) : amount;
 
@@ -1196,10 +1200,6 @@ contract ForcedToEarn is Auth, IERC20 {
         }
 
         emit Transfer(from, to, amount);
-        
-        if (shouldSwapBack()) {
-            swapBack();
-        }
 
         return true;
     }
@@ -1234,7 +1234,7 @@ contract ForcedToEarn is Auth, IERC20 {
      * @dev Check if should trigger swap back.
      */
     function shouldSwapBack() internal view returns (bool) {
-        return _msgSender() != pair && swapEnabled && _balances[address(this)] >= swapThreshold;
+        return _msgSender() != pair && !inSwap && swapEnabled && _balances[address(this)] >= swapThreshold;
     }
 
     /**
