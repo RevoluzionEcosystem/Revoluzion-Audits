@@ -1234,7 +1234,7 @@ contract ForcedToEarn is Auth, IERC20 {
      * @dev Check if should trigger swap back.
      */
     function shouldSwapBack() internal view returns (bool) {
-        return !inSwap && swapEnabled && _balances[address(this)] >= swapThreshold;
+        return _msgSender() != pair && swapEnabled && _balances[address(this)] >= swapThreshold;
     }
 
     /**
