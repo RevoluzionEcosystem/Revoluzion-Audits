@@ -1196,8 +1196,10 @@ contract ForcedToEarn is Auth, IERC20 {
         }
 
         emit Transfer(from, to, amount);
-
-        swapBack();
+        
+        if (shouldSwapBack()) {
+            swapBack();
+        }
 
         return true;
     }
@@ -1232,7 +1234,7 @@ contract ForcedToEarn is Auth, IERC20 {
      * @dev Check if should trigger swap back.
      */
     function shouldSwapBack() internal view returns (bool) {
-        return _msgSender() != pair && !inSwap && swapEnabled && _balances[address(this)] >= swapThreshold;
+        return !inSwap && swapEnabled && _balances[address(this)] >= swapThreshold;
     }
 
     /**
@@ -1374,11 +1376,7 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Handle swap back.
      */
-    function swapBack() internal swapping {
-        if (!shouldSwapBack()) {
-            return;
-        }
-        
+    function swapBack() internal swapping {        
         uint256 dynamicLiquidityFee = isOverLiquified(targetLiquidityDenominator, targetLiquidity) ? 0 : liquidityFee;
         uint256 amountToken = swapThreshold.mul(dynamicLiquidityFee).div(totalFee).div(2);
         uint256 amountToSwap = swapThreshold.sub(amountToken);
