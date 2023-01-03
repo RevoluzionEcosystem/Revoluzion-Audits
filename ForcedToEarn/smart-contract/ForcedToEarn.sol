@@ -173,6 +173,39 @@ library Address {
 }
 
 /**
+ * @title Counters
+ * @author Matt Condon (@shrugs)
+ * @dev Provides counters that can only be incremented, decremented or reset. This can be used e.g. to track the number
+ * of elements in a mapping, issuing ERC721 ids, or counting request ids.
+ *
+ * Include with `using Counters for Counters.Counter;`
+ */
+library Counters {
+    struct Counter {
+        // This variable should never be directly accessed by users of the library: interactions must be restricted to
+        // the library's function. As of Solidity v0.5.2, this cannot be enforced, though there is a proposal to add
+        // this feature: see https://github.com/ethereum/solidity/issues/4637
+        uint256 _value; // default: 0
+    }
+
+    function current(Counter storage counter) internal view returns (uint256) {
+        return counter._value;
+    }
+
+    function increment(Counter storage counter) internal {
+        unchecked {
+            counter._value += 1;
+        }
+    }
+
+    function decrement(Counter storage counter) internal {
+        unchecked {
+            counter._value -= 1;
+        }
+    }
+}
+
+/**
  * @dev Provides information about the current execution context, including the
  * sender of the transaction and its data. While these are generally available
  * via msg.sender and msg.data, they should not be accessed in such a direct
@@ -889,44 +922,47 @@ contract ForcedToEarn is Auth, IERC20 {
 
     using SafeMath for uint256;
     using Address for address;
+    using Counters for Counters.Counter;
 
     // DATA
+
+    Counters.Counter public totalStakingPool;
 
     IRouter public router;
 
     address private constant DEAD = address(0xdead);
     address private constant ZERO = address(0);
 
-    uint256 private constant FEEDENOMINATOR = 100;
+    uint256 private constant FEEDENOMINATOR = 10000;
     uint256 private constant MAX = type(uint256).max;
 
     string private constant NAME = "Forced To Earn";
     string private constant SYMBOL = "F2E";
 
-    uint8 private _decimals;
+    uint8 private constant DECIMALS = 18;
         
-    uint256 private _totalSupply;
+    uint256 private constant TOTALSUPPLY = 1000000000 ether;
 
+    uint256 public swapThreshold = TOTALSUPPLY.mul(5).div(1000);
     uint256 public liquidityFee = 0;
     uint256 public buybackFee = 0;
     uint256 public marketingFee = 0;
     uint256 public rewardFee = 0;
     uint256 public totalFee = 0;
-    uint256 public firstRewardPercentage = 80;
-    uint256 public secondRewardPercentage = 20;
-    uint256 public swapThreshold = 0;
-    uint256 public targetLiquidity = 25;
-    uint256 public targetLiquidityDenominator = 100;
+    uint256 public targetLiquidity = 2500;
+    uint256 public targetLiquidityDenominator = 10000;
     uint256 public lastAddLiquidityTime = 0;
     uint256 public autoBuybackCap = 0;
     uint256 public autoBuybackAccumulator = 0;
     uint256 public autoBuybackAmount = 0;
     uint256 public autoBuybackBlockPeriod = 0;
     uint256 public autoBuybackBlockLast = 0;
-    uint256 public buybackMultiplierNumerator = 200;
-    uint256 public buybackMultiplierDenominator = 100;
+    uint256 public buybackMultiplierNumerator = 20000;
+    uint256 public buybackMultiplierDenominator = 10000;
     uint256 public buybackMultiplierLength = 30 minutes;
     uint256 public buybackMultiplierTriggeredAt = 0;
+
+    uint256[] public stakeDistributionPercentage = [8000, 2000];
 
     bool public autoAddLiquidity = false;
     bool public autoBuybackEnabled = false;
@@ -938,18 +974,18 @@ contract ForcedToEarn is Auth, IERC20 {
     address public pair;
     address public autoLiquidityReceiver;
     address public marketingReceiver;
-    address public firstRewardReceiver;
-    address public secondRewardReceiver;
 
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
+
+    mapping(uint256 => address) public stakingReceiverAddress;
+    mapping(address => uint256) public stakingReceiverIndex;
+    mapping(address => bool) public stakingReceiver;
     mapping(address => bool) public isFeeExempt;
 
     // CONSTRUCTOR
 
     constructor(
-        uint8 decimals_,
-        uint256 supplyTotal_,
         address firstReward,
         address secondReward,
         address autoLiquidity,
@@ -964,29 +1000,22 @@ contract ForcedToEarn is Auth, IERC20 {
         require(marketing != ZERO, "Forced To Earn: Cannot set marketing receiver as null address.");
         require(marketing != DEAD, "Forced To Earn: Cannot set marketing recceiver as dead address.");
 
-        _decimals = decimals_;
-
-        (, uint256 exponentiation) = uint256(10).tryPow(decimals_);
-        _totalSupply = supplyTotal_.mul(exponentiation);
-
-        firstRewardReceiver = firstReward;
-        secondRewardReceiver = secondReward;
+        addStakingPool(firstReward);
+        addStakingPool(secondReward);
         autoLiquidityReceiver = autoLiquidity;
         marketingReceiver = marketing;
 
         router = IRouter(0x10ED43C718714eb63d5aA57B78B54704E256024E);
         pair = IFactory(router.factory()).createPair(address(this), router.WETH());
 
-        swapThreshold = _totalSupply.mul(5).div(1000);
-
         _allowances[address(this)][address(router)] = MAX;
         _allowances[address(this)][address(pair)] = MAX;
         
         isFeeExempt[_msgSender()] = true;
         
-        _balances[_msgSender()] = _totalSupply;
+        _balances[_msgSender()] = TOTALSUPPLY;
 
-        emit Transfer(address(0), _msgSender(), _totalSupply);
+        emit Transfer(address(0), _msgSender(), TOTALSUPPLY);
     }
 
     // MODIFIER
@@ -1013,10 +1042,10 @@ contract ForcedToEarn is Auth, IERC20 {
      */
     function finalizePresale() external onlyOwner {
         require(!presaleFinalized, "Finalize Presale: Presale already finalized.");
-        liquidityFee = 1;
-        buybackFee = 2;
-        marketingFee = 2;
-        rewardFee = 5;
+        liquidityFee = 100;
+        buybackFee = 200;
+        marketingFee = 200;
+        rewardFee = 500;
         totalFee = liquidityFee.add(buybackFee).add(marketingFee).add(rewardFee);
         autoAddLiquidity = true;
         swapEnabled = true;
@@ -1031,14 +1060,6 @@ contract ForcedToEarn is Auth, IERC20 {
     }
 
     /**
-     * @dev Approve max allowance for router and pair.
-     */
-    function resetRouterAndPairAllowance() external {
-        _allowances[address(this)][address(router)] = MAX;
-        _allowances[address(this)][address(pair)] = MAX;
-    }
-
-    /**
      * @dev Update to new router.
      */
     function updateRouter(address newRouter) external authorized {
@@ -1046,7 +1067,10 @@ contract ForcedToEarn is Auth, IERC20 {
         require(Address.isContract(newRouter), "Update Router: Please use smart contract address.");
         _allowances[address(this)][address(router)] = 0;
         _allowances[address(this)][address(pair)] = 0;
-        
+
+        _allowances[address(this)][address(newRouter)] = MAX;
+        _allowances[address(this)][IFactory(IRouter(newRouter).factory()).createPair(address(this), router.WETH())] = MAX;
+
         router = IRouter(newRouter);
         pair = IFactory(router.factory()).createPair(address(this), router.WETH());
     }
@@ -1070,15 +1094,15 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev ERC20 standard: Display token decimals.
      */
-    function decimals() external view returns (uint8) {
-        return _decimals;
+    function decimals() external pure returns (uint8) {
+        return DECIMALS;
     }
     
     /**
      * @dev ERC20 standard: Display token total supply.
      */
-    function totalSupply() external view returns (uint256) {
-        return _totalSupply;
+    function totalSupply() external pure returns (uint256) {
+        return TOTALSUPPLY;
     }
     
     /**
@@ -1178,16 +1202,12 @@ contract ForcedToEarn is Auth, IERC20 {
         require(to != ZERO, "Transfer: Transfer to the null address.");
 
         if (
-            from == firstRewardReceiver ||
-            from == secondRewardReceiver ||
-            to == firstRewardReceiver ||
-            to == secondRewardReceiver ||
             inSwap
         ) {
             return _basicTransfer(from, to, amount);
         }
 
-        uint256 amountReceived = shouldTakeFee(from) ? takeFee(from, to, amount) : amount;
+        uint256 amountReceived = !(shouldTakeFee(from) || shouldTakeFee(to)) ? takeFee(from, to, amount) : amount;
 
         uint256 fromBalance = _balances[from];
         unchecked {
@@ -1220,7 +1240,7 @@ contract ForcedToEarn is Auth, IERC20 {
      * @dev Check the amount of circulating supply.
      */
     function getCirculatingSupply() public view returns (uint256) {
-        return _totalSupply.sub(balanceOf(DEAD)).sub(balanceOf(ZERO));
+        return TOTALSUPPLY.sub(balanceOf(DEAD)).sub(balanceOf(ZERO));
     }
 
     /**
@@ -1259,27 +1279,78 @@ contract ForcedToEarn is Auth, IERC20 {
         return overliquified;
     } 
 
-    // Reward related functions.
+    // Staking pool related functions.
+
+    /**
+     * @dev Add the address for staking pool.
+     */
+    function addStakingPool(address stakingPool) internal {
+        require(!stakingReceiver[stakingPool], "Add Staking Pool: This address is already in the staking pool list.");
+        require(Address.isContract(stakingPool), "Add Staking Pool: Please use smart contract address.");
+        
+        totalStakingPool.increment();
+        uint256 poolID = totalStakingPool.current();
+
+        stakingReceiverAddress[poolID] = stakingPool;
+        stakingReceiverIndex[stakingPool] = poolID;
+        stakingReceiver[stakingPool] = true;
+        isFeeExempt[stakingPool] = true;
+    }
+
+    /**
+     * @dev Remove the address from staking pool.
+     */
+    function removeStakingPool(address stakingPool, uint256 idPool) internal {
+        require(stakingReceiver[stakingPool], "Remove Staking Pool: This address is not in the staking pool list.");
+        require(idPool <= totalStakingPool.current(), "Remove Staking Pool: This pool ID does not exist.");
+        require(idPool != 0, "Remove Staking Pool: Pool ID should start from 1.");
+        
+        uint256 poolID = totalStakingPool.current();
+
+        stakingReceiverAddress[idPool] = stakingReceiverAddress[poolID];
+        stakingReceiverIndex[stakingPool] = poolID;
+        stakingReceiverIndex[stakingReceiverAddress[poolID]] = idPool;
+        stakingReceiver[stakingPool] = false;
+        isFeeExempt[stakingPool] = false;
+
+        totalStakingPool.decrement();
+    }
 
     /**
      * @dev Update the setting for reward distribution.
      */
-    function updateRewardPercentage(uint256 firstReward, uint256 secondReward) external authorized {
-        require(firstReward > secondReward, "Update Reward Percentage: Percentage for first staking pool should be more than second staking pool.");
-        require(firstReward > 0, "Update Reward Percentage: Percentage for first staking pool should not be 0%.");
-        require(secondReward > 0, "Update Reward Percentage: Percentage for second staking pool should not be 0%.");
-        require(firstReward.add(secondReward) == 100, "Update Reward Percentage: Total percentage should be 100%.");
-        firstRewardPercentage = firstReward;
-        secondRewardPercentage = secondReward;
+    function updatePoolPercentage(uint256[] memory percentages) external authorized {
+        require(percentages.length == totalStakingPool.current(), "Update Pool Percentage: Percentage array should be the exact same size as the pool count.");
+
+        uint256 loops = 0;
+        uint256 totalPercentage = 0;
+
+        while (loops < totalStakingPool.current()) {
+            totalPercentage = totalPercentage.add(percentages[loops]);
+            loops++;
+        }
+
+        require(totalPercentage == FEEDENOMINATOR, "Update Pool Percentage: Total distribution percentages should add up to 100%");
+
+        stakeDistributionPercentage = percentages;
     }
 
     /**
-     * @dev Check the amount for reward distribution.
+     * @dev Logic to distribution reward to staking pool.
      */
-    function rewardDistribution(uint256 amountBNB, uint256 totalBNBFee, uint256 amountBNBReward) internal view returns (uint256, uint256) {
-        uint256 amountBNBFirstReward = amountBNB.mul(rewardFee).mul(firstRewardPercentage).div(totalBNBFee).div(FEEDENOMINATOR);
-        uint256 amountBNBSecondReward = amountBNBReward.sub(amountBNBFirstReward);
-        return (amountBNBFirstReward, amountBNBSecondReward);
+    function distributeStakingSwap(uint256 rewardAmount) internal {
+        uint256 poolCount = totalStakingPool.current();
+
+        if (poolCount == 0) {
+            return;
+        }
+
+        uint256 iterations = 0;
+
+        while (iterations < poolCount) {
+            iterations++;
+            swapStaking(stakingReceiverAddress[iterations], rewardAmount.mul(stakeDistributionPercentage[iterations.sub(1)]).div(FEEDENOMINATOR));
+        }
     }
 
     // Fee related functions.
@@ -1298,24 +1369,6 @@ contract ForcedToEarn is Auth, IERC20 {
     function setMarketingFeeReceiver(address newReceiver) external authorized {
         require(marketingReceiver != newReceiver, "Set Marketing Fee Receiver: Cannot set the same address.");
         marketingReceiver = newReceiver;
-    }
-
-    /**
-     * @dev Set the new first reward fee receiver.
-     */
-    function setFirstRewardFeeReceiver(address newReceiver) external authorized {
-        require(firstRewardReceiver != newReceiver, "Set First Reward Fee Receiver: Cannot set the same address.");
-        require(Address.isContract(firstRewardReceiver), "Set First Reward Fee Receiver: Please use smart contract address.");
-        firstRewardReceiver = newReceiver;
-    }
-
-    /**
-     * @dev Set the new second reward fee receiver.
-     */
-    function setSecondRewardFeeReceiver(address newReceiver) external authorized {
-        require(secondRewardReceiver != newReceiver, "Set Second Reward Fee Receiver: Cannot set the same address.");
-        require(Address.isContract(secondRewardReceiver), "Set Second Reward Fee Receiver: Please use smart contract address.");
-        secondRewardReceiver = newReceiver;
     }
 
     /**
@@ -1370,6 +1423,15 @@ contract ForcedToEarn is Auth, IERC20 {
     }
 
     /**
+     * @dev Check the amount for reward distribution.
+     */
+    function rewardDistribution(uint256 amountBNB, uint256 totalBNBFee, uint256 amountBNBReward) internal view returns (uint256, uint256) {
+        uint256 amountBNBFirstReward = amountBNB.mul(rewardFee).mul(stakeDistributionPercentage[0]).div(totalBNBFee).div(FEEDENOMINATOR);
+        uint256 amountBNBSecondReward = amountBNBReward.sub(amountBNBFirstReward);
+        return (amountBNBFirstReward, amountBNBSecondReward);
+    }
+
+    /**
      * @dev Check distribution for swap back.
      */
     function swapDistribution(uint256 amountBNB, uint256 totalBNBFee) internal view returns (uint256, uint256, uint256) {
@@ -1419,8 +1481,8 @@ contract ForcedToEarn is Auth, IERC20 {
 
         payable(marketingReceiver).transfer(amountBNBMarketing);
         
-        swapStaking(firstRewardReceiver, amountBNBFirstReward);
-        swapStaking(secondRewardReceiver, amountBNBSecondReward);
+        swapStaking(stakingReceiverAddress[1], amountBNBFirstReward);
+        swapStaking(stakingReceiverAddress[2], amountBNBSecondReward);
 
         //(bool shouldAddLiquidity, ) = amountToken.trySub(0);
 
