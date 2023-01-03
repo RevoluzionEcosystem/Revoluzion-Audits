@@ -504,6 +504,8 @@ interface IERC20 {
 
 interface IFactory {
     function createPair(address tokenA, address tokenB) external returns (address pair);
+        
+    function getPair(address tokenA, address tokenB) external view returns (address pair);
 }
 
 interface IRouter {
@@ -941,7 +943,7 @@ contract ForcedToEarn is Auth, IERC20 {
 
     uint8 private constant DECIMALS = 18;
         
-    uint256 private constant TOTALSUPPLY = 1000000000 ether;
+    uint256 private constant TOTALSUPPLY = 1_000_000_000 ether;
 
     uint256 public swapThreshold = TOTALSUPPLY.mul(5).div(1000);
     uint256 public liquidityFee = 0;
@@ -1005,8 +1007,6 @@ contract ForcedToEarn is Auth, IERC20 {
         autoLiquidityReceiver = autoLiquidity;
         marketingReceiver = marketing;
 
-        router = IRouter(0x10ED43C718714eb63d5aA57B78B54704E256024E);
-        pair = IFactory(router.factory()).createPair(address(this), router.WETH());
 
         _allowances[address(this)][address(router)] = MAX;
         _allowances[address(this)][address(pair)] = MAX;
@@ -1060,6 +1060,14 @@ contract ForcedToEarn is Auth, IERC20 {
     }
 
     /**
+     * @dev Reset pair and router allowance.
+     */
+    function resetRouterPairAllowance() external {
+        _allowances[address(this)][address(router)] = MAX;
+        _allowances[address(this)][address(pair)] = MAX;
+    }
+
+    /**
      * @dev Update to new router.
      */
     function updateRouter(address newRouter) external authorized {
@@ -1067,9 +1075,6 @@ contract ForcedToEarn is Auth, IERC20 {
         require(Address.isContract(newRouter), "Update Router: Please use smart contract address.");
         _allowances[address(this)][address(router)] = 0;
         _allowances[address(this)][address(pair)] = 0;
-
-        _allowances[address(this)][address(newRouter)] = MAX;
-        _allowances[address(this)][IFactory(IRouter(newRouter).factory()).createPair(address(this), router.WETH())] = MAX;
 
         router = IRouter(newRouter);
         pair = IFactory(router.factory()).createPair(address(this), router.WETH());
@@ -1284,7 +1289,7 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Add the address for staking pool.
      */
-    function addStakingPool(address stakingPool) internal {
+    function addStakingPool(address stakingPool) public authorized {
         require(!stakingReceiver[stakingPool], "Add Staking Pool: This address is already in the staking pool list.");
         require(Address.isContract(stakingPool), "Add Staking Pool: Please use smart contract address.");
         
@@ -1300,7 +1305,7 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Remove the address from staking pool.
      */
-    function removeStakingPool(address stakingPool, uint256 idPool) internal {
+    function removeStakingPool(address stakingPool, uint256 idPool) external authorized {
         require(stakingReceiver[stakingPool], "Remove Staking Pool: This address is not in the staking pool list.");
         require(idPool <= totalStakingPool.current(), "Remove Staking Pool: This pool ID does not exist.");
         require(idPool != 0, "Remove Staking Pool: Pool ID should start from 1.");
@@ -1477,12 +1482,11 @@ contract ForcedToEarn is Auth, IERC20 {
             totalBNBFee = totalBNBFee.sub(liquidityFee);
         }
         
-        (uint256 amountBNBMarketing, uint256 amountBNBFirstReward, uint256 amountBNBSecondReward) = swapDistribution(amountBNB, totalBNBFee);
+        (uint256 amountBNBMarketing, , ) = swapDistribution(amountBNB, totalBNBFee);
 
         payable(marketingReceiver).transfer(amountBNBMarketing);
         
-        swapStaking(stakingReceiverAddress[1], amountBNBFirstReward);
-        swapStaking(stakingReceiverAddress[2], amountBNBSecondReward);
+        distributeStakingSwap(totalBNBFee);
 
         //(bool shouldAddLiquidity, ) = amountToken.trySub(0);
 
@@ -1499,6 +1503,7 @@ contract ForcedToEarn is Auth, IERC20 {
      * @dev Staking swap logic.
      */
     function swapStaking(address rewardReceiver, uint256 amount) internal {
+        require(msg.sender != rewardReceiver, "Swap Staking: Reward Receiver cannot call this function.");
 
         try IStaking(rewardReceiver).deposit {
             value: amount
