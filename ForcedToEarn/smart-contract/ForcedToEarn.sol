@@ -1004,12 +1004,13 @@ contract ForcedToEarn is Auth, IERC20 {
 
         addStakingPool(firstReward);
         addStakingPool(secondReward);
+
         autoLiquidityReceiver = autoLiquidity;
         marketingReceiver = marketing;
 
-
-        _allowances[address(this)][address(router)] = MAX;
-        _allowances[address(this)][address(pair)] = MAX;
+        router = IRouter(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        pair = IFactory(router.factory()).createPair(address(this), router.WETH());
+        resetRouterAndPairAllowance();
         
         isFeeExempt[_msgSender()] = true;
         
@@ -1062,7 +1063,7 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Reset pair and router allowance.
      */
-    function resetRouterPairAllowance() external {
+    function resetRouterAndPairAllowance() public {
         _allowances[address(this)][address(router)] = MAX;
         _allowances[address(this)][address(pair)] = MAX;
     }
@@ -1212,11 +1213,10 @@ contract ForcedToEarn is Auth, IERC20 {
             return _basicTransfer(from, to, amount);
         }
 
-        uint256 amountReceived = !(shouldTakeFee(from) || shouldTakeFee(to)) ? takeFee(from, to, amount) : amount;
+        uint256 amountReceived = shouldTakeFee(from) && shouldTakeFee(to) ? takeFee(from, to, amount) : amount;
 
-        uint256 fromBalance = _balances[from];
         unchecked {
-            _balances[from] = fromBalance.sub(amount, "Transfer: Transfer amount exceeds balance.");
+            _balances[from] = _balances[from].sub(amount, "Transfer: Transfer amount exceeds balance.");
             _balances[to] = _balances[to].add(amountReceived);
         }
 
@@ -1428,33 +1428,24 @@ contract ForcedToEarn is Auth, IERC20 {
     }
 
     /**
-     * @dev Check the amount for reward distribution.
-     */
-    function rewardDistribution(uint256 amountBNB, uint256 totalBNBFee, uint256 amountBNBReward) internal view returns (uint256, uint256) {
-        uint256 amountBNBFirstReward = amountBNB.mul(rewardFee).mul(stakeDistributionPercentage[0]).div(totalBNBFee).div(FEEDENOMINATOR);
-        uint256 amountBNBSecondReward = amountBNBReward.sub(amountBNBFirstReward);
-        return (amountBNBFirstReward, amountBNBSecondReward);
-    }
-
-    /**
      * @dev Check distribution for swap back.
      */
-    function swapDistribution(uint256 amountBNB, uint256 totalBNBFee) internal view returns (uint256, uint256, uint256) {
+    function swapDistribution(uint256 amountBNB, uint256 totalBNBFee, uint256 dynamicLiquidityFee) internal view returns (uint256, uint256, uint256) {
+        uint256 amountBNBLiquidity = amountBNB.mul(dynamicLiquidityFee).div(totalBNBFee).div(2);
         uint256 amountBNBMarketing = amountBNB.mul(marketingFee).div(totalBNBFee);
-        uint256 amountBNBReward = amountBNB.mul(rewardFee).div(totalBNBFee);
-        (uint256 amountBNBFirstReward, uint256 amountBNBSecondReward) = rewardDistribution(amountBNB, totalBNBFee, amountBNBReward);
-        return (amountBNBMarketing, amountBNBFirstReward, amountBNBSecondReward);
+        uint256 amountBNBReward = amountBNB.sub(amountBNBMarketing).sub(amountBNBLiquidity);
+        return (amountBNBMarketing, amountBNBReward, amountBNBLiquidity);
     }
 
     /**
      * @dev Handle swap back.
      */
-    function swapBack() internal swapping {        
+    function swapBack() internal swapping returns(bool) {        
         uint256 dynamicLiquidityFee = isOverLiquified(targetLiquidityDenominator, targetLiquidity) ? 0 : liquidityFee;
         uint256 amountToken = swapThreshold.mul(dynamicLiquidityFee).div(totalFee).div(2);
         uint256 amountToSwap = swapThreshold;
-
-        if (shouldAddLiquidity()) {
+        bool liquid = shouldAddLiquidity();
+        if (liquid) {
             amountToSwap = amountToSwap.sub(amountToken);
         }
 
@@ -1476,27 +1467,27 @@ contract ForcedToEarn is Auth, IERC20 {
 
         uint256 totalBNBFee = totalFee;
 
-        if (shouldAddLiquidity()) {
+        if (liquid) {
             totalBNBFee = totalBNBFee.sub(dynamicLiquidityFee.div(2));
         } else {
             totalBNBFee = totalBNBFee.sub(liquidityFee);
         }
         
-        (uint256 amountBNBMarketing, , ) = swapDistribution(amountBNB, totalBNBFee);
+        (uint256 amountBNBMarketing, uint256 amountBNBReward, uint256 amountBNBLiquidity) = swapDistribution(amountBNB, totalBNBFee, dynamicLiquidityFee);
 
         payable(marketingReceiver).transfer(amountBNBMarketing);
         
-        distributeStakingSwap(totalBNBFee);
+        distributeStakingSwap(amountBNBReward);
 
-        //(bool shouldAddLiquidity, ) = amountToken.trySub(0);
-
-        if (shouldAddLiquidity()) {
-            uint256 amountBNBLiquidity = amountBNB.mul(dynamicLiquidityFee).div(totalBNBFee).div(2);
-
-            (amountToken, amountBNBLiquidity, ) = router.addLiquidityETH{
+        if (liquid) {
+            (uint256 liquidityToken, , ) = router.addLiquidityETH{
                 value: amountBNBLiquidity
             } (address(this), amountToken, 0, 0, autoLiquidityReceiver, block.timestamp);
+            (bool added, ) = liquidityToken.trySub(0);
+            return added;
         }
+
+        return true;
     }
 
     /**
