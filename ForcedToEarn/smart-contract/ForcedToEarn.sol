@@ -1211,18 +1211,18 @@ contract ForcedToEarn is Auth, IERC20 {
             return _basicTransfer(from, to, amount);
         }
 
+        if (shouldSwapBack()) {
+            swapBack();
+        }
+
         uint256 amountReceived = shouldTakeFee(from, to) ? takeFee(from, to, amount) : amount;
 
         unchecked {
-            _balances[from] = _balances[from].sub(amount, "Transfer: Transfer amount exceeds balance.");
+            _balances[from] = _balances[from].sub(amountReceived, "Transfer: Transfer amount exceeds balance.");
             _balances[to] = _balances[to].add(amountReceived);
         }
 
         emit Transfer(from, to, amount);
-
-        if (shouldSwapBack()) {
-            swapBack();
-        }
 
         return true;
     }
@@ -1315,18 +1315,19 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Remove the address from staking pool.
      */
-    function removeStakingPool(address stakingPool, uint256 idPool) external authorized {
+    function removeStakingPool(address stakingPool) external authorized {
         require(stakingReceiver[stakingPool], "Remove Staking Pool: This address is not in the staking pool list.");
-        require(idPool <= totalStakingPool.current(), "Remove Staking Pool: This pool ID does not exist.");
-        require(idPool != 0, "Remove Staking Pool: Pool ID should start from 1.");
         
-        uint256 poolID = totalStakingPool.current();
+        uint256 poolID = stakingReceiverIndex[stakingPool];
+        uint256 lastPoolID = totalStakingPool.current();
 
-        stakingReceiverAddress[idPool] = stakingReceiverAddress[poolID];
-        stakingReceiverIndex[stakingPool] = poolID;
-        stakingReceiverIndex[stakingReceiverAddress[poolID]] = idPool;
+        stakingReceiverIndex[stakingPool] = 0;
+        stakingReceiverAddress[poolID] = stakingReceiverAddress[lastPoolID];
         stakingReceiver[stakingPool] = false;
         isFeeExempt[stakingPool] = false;
+        
+        stakingReceiverIndex[stakingReceiverAddress[lastPoolID]] = poolID;
+        stakingReceiverAddress[lastPoolID] = ZERO;
 
         totalStakingPool.decrement();
     }
