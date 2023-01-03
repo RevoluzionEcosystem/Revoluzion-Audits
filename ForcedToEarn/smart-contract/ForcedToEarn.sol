@@ -1207,13 +1207,11 @@ contract ForcedToEarn is Auth, IERC20 {
         require(from != ZERO, "Transfer: Transfer from the null address.");
         require(to != ZERO, "Transfer: Transfer to the null address.");
 
-        if (
-            inSwap
-        ) {
+        if (inSwap) {
             return _basicTransfer(from, to, amount);
         }
 
-        uint256 amountReceived = shouldTakeFee(from) && shouldTakeFee(to) ? takeFee(from, to, amount) : amount;
+        uint256 amountReceived = shouldTakeFee(from, to) ? takeFee(from, to, amount) : amount;
 
         unchecked {
             _balances[from] = _balances[from].sub(amount, "Transfer: Transfer amount exceeds balance.");
@@ -1221,7 +1219,7 @@ contract ForcedToEarn is Auth, IERC20 {
         }
 
         emit Transfer(from, to, amount);
-        
+
         if (shouldSwapBack()) {
             swapBack();
         }
@@ -1251,8 +1249,20 @@ contract ForcedToEarn is Auth, IERC20 {
     /**
      * @dev Check if should take fee.
      */
-    function shouldTakeFee(address sender) internal view returns (bool) {
-        return !isFeeExempt[sender];
+    function shouldTakeFee(address sender, address receiver) internal view returns (bool) {
+        bool senderFee = sender == address(router) || sender == address(pair) || sender == address(this);
+        bool receiverFee = receiver == address(router) || receiver == address(pair) || receiver == address(this);
+        if (senderFee && receiverFee) {
+            return false;
+        } else if (senderFee && isFeeExempt[receiver] && !receiverFee) {
+            return false;
+        } else if (!senderFee && !receiverFee) {
+            return false;
+        } else if (!senderFee && isFeeExempt[sender] && receiverFee) {
+            return false;
+        } else {
+            return true;
+        }
     }
 
     /**
@@ -1433,7 +1443,7 @@ contract ForcedToEarn is Auth, IERC20 {
     function swapDistribution(uint256 amountBNB, uint256 totalBNBFee, uint256 dynamicLiquidityFee) internal view returns (uint256, uint256, uint256) {
         uint256 amountBNBLiquidity = amountBNB.mul(dynamicLiquidityFee).div(totalBNBFee).div(2);
         uint256 amountBNBMarketing = amountBNB.mul(marketingFee).div(totalBNBFee);
-        uint256 amountBNBReward = amountBNB.sub(amountBNBMarketing).sub(amountBNBLiquidity);
+        uint256 amountBNBReward = amountBNB.mul(rewardFee).div(totalBNBFee);
         return (amountBNBMarketing, amountBNBReward, amountBNBLiquidity);
     }
 
