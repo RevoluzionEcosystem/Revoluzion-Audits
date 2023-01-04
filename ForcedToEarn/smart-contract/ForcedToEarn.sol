@@ -1211,7 +1211,7 @@ contract ForcedToEarn is Auth, IERC20 {
             return _basicTransfer(from, to, amount);
         }
 
-        if (shouldSwapBack()) {
+        if (shouldSwapBack() && !stakingReceiver[_msgSender()]) {
             swapBack();
         }
 
