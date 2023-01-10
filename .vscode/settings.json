@@ -1,0 +1,9 @@
+{
+    "codesnap.showWindowControls": false,
+    "codesnap.showWindowTitle": true,
+    "codesnap.transparentBackground": true,
+    "codesnap.realLineNumbers": true,
+    "codesnap.containerPadding": "3rem",
+    "codesnap.boxShadow": "9px 9px 12px #000000, -9px -9px 12px #101010",
+    "codesnap.backgroundColor": "#404040"
+}
