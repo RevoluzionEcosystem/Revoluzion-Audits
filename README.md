@@ -5,7 +5,9 @@ List of Audits PDF reports done by Revoluzion<br/>
 
 If you are in need of an audit report, please don't hesitate to contact at [Revoluzion](https://t.me/Zackrevoluzion77).
 
-For more info, check out Revoluzion Audit documentation section<br/>
+Visit Revoluzion Audit Services page here : https://revoluzion.io/audit-services
+
+For more technical info, check out Revoluzion Audit documentation section<br/>
 https://docs.revoluzion.io/services-provided-by-revoluzion/smart-contract-audit
 
 ## Disclaimer</br>
