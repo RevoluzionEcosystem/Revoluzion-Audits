@@ -1,4 +1,4 @@
-![alt text](https://revoluzion.io/wp-content/uploads/2022/12/Seal-Audit.png)
+![Revoluzion Audit](https://revoluzion.io/Seal-Audit.png)
 
 # Revoluzion Audits
 List of Audits PDF reports done by Revoluzion<br/>
