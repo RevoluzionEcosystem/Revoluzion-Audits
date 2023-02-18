@@ -1,4 +1,4 @@
-![Revoluzion Audit](https://revoluzion.io/Seal-Audit.png)
+![Revoluzion Audit](https://revoluzion.io/sealaudit.png)
 
 # Revoluzion Audits
 List of Audits PDF reports done by Revoluzion<br/>
