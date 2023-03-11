@@ -1,3 +1,7 @@
+# IMPORTANT!
+
+We are currently migrating all current previous audit reports onto our dApp audit repository. All audit reports are now conducted and displayed on Revoluzion Decentralized App itself. Link to all reports are now at : https://revoluzion.app/audits. <br/> <br/>
+
 ![Revoluzion Audit](https://revoluzion.io/sealaudit.png)
 
 # Revoluzion Audits
